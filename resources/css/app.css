@@ -93,6 +93,16 @@
   font-family: var(--doc-font-family, 'Times New Roman', Times, serif) !important;
 }
 
+/* Perfect Dot Leader for Print and Web */
+.dot-leader {
+  flex: 1;
+  background-image: radial-gradient(circle, #000 1px, transparent 1.5px);
+  background-position: bottom;
+  background-size: 1ex 2px;
+  background-repeat: repeat-x;
+  margin-bottom: 4px; /* Align to text baseline */
+}
+
 /* Print Specific Optimizations */
 @media print {
   /* Reset outer layout structures for printing */
@@ -146,6 +156,16 @@
     display: block !important;
     position: relative !important;
     background-color: #ffffff !important;
+  }
+  
+  /* Disable dashed borders inside the editor when printing */
+  .page-content {
+    border: none !important;
+  }
+  
+  /* Disable browser default headers and footers (URL, Date, Page Number) */
+  @page {
+    margin: 0 !important;
   }
 
   /* Remove transform scale during print */

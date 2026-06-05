@@ -118,6 +118,8 @@ PENTING: Anda harus mengembalikan respon dalam format JSON array yang valid tanp
             'section' => 'required|string|max:255',
             'topik' => 'nullable|string|max:1000',
             'metode' => 'nullable|string|max:255',
+            'section_title' => 'nullable|string|max:500',
+            'bab_context' => 'nullable|string|max:255',
         ]);
 
         $apiKey = $this->getApiKey($request);
@@ -133,8 +135,29 @@ PENTING: Anda harus mengembalikan respon dalam format JSON array yang valid tanp
         $topik = $request->input('topik') ?? 'Sesuai judul';
         $metode = $request->input('metode') ?? 'Metode kualitatif/kuantitatif standar';
 
-        // Tailor the prompt based on the specific section requested
-        $sectionPrompts = [
+        // Handle dynamic section generation (for imported DOCX headings etc.)
+        if ($section === '__dynamic__') {
+            $sectionTitle = $request->input('section_title', 'Bagian ini');
+            $babContext = $request->input('bab_context', 'BAB');
+
+            $prompt = "Anda adalah penulis akademik skripsi Indonesia yang ahli. Tulis draf konten ilmiah untuk bagian berikut:
+
+Judul Skripsi: {$title}
+Topik: {$topik}
+Metode: {$metode}
+Konteks BAB: {$babContext}
+Judul Sub-Bab: {$sectionTitle}
+
+Ketentuan:
+- Tulis dalam bahasa Indonesia akademis yang formal dan ilmiah
+- Tulis minimal 2-3 paragraf yang mendalam dan relevan sesuai konteks bab dan judul sub-bab
+- Sesuaikan gaya penulisan dengan konteks bab (misalnya: BAB I = pendahuluan/latar belakang, BAB II = tinjauan pustaka/teori, BAB III = metodologi, BAB IV = hasil/pembahasan, BAB V = penutup/kesimpulan)
+- Jika judul sub-bab berkaitan dengan poin-poin (identifikasi, rumusan, kesimpulan, saran), sajikan dalam format poin bernomor
+
+PENTING: Berikan LANGSUNG isi draf tulisan yang siap disalin tanpa teks sapaan pembuka (seperti 'Halo', 'Berikut adalah draf...') atau teks penutup. Tulis secara mendalam, rapi, dan ilmiah.";
+        } else {
+            // Tailor the prompt based on the specific section requested
+            $sectionPrompts = [
             'latar_belakang' => "Tulis draf paragraf mendalam untuk bagian 'Latar Belakang Masalah' (BAB I) skripsi.
 Judul Skripsi: {$title}
 Topik: {$topik}
@@ -209,9 +232,10 @@ Judul Skripsi: {$title}
 Ketentuan: Tulis saran teoritis dan praktis bagi pembaca, universitas, atau peneliti selanjutnya berdasarkan keterbatasan penelitian ini. Tulis minimal 2-3 poin."
         ];
 
-        $prompt = $sectionPrompts[$section] ?? "Tulis isi draf akademik formal dalam bahasa Indonesia untuk bagian {$section} skripsi dengan judul '{$title}'.";
+            $prompt = $sectionPrompts[$section] ?? "Tulis isi draf akademik formal dalam bahasa Indonesia untuk bagian {$section} skripsi dengan judul '{$title}'.";
         
-        $prompt .= "\n\nPENTING: Berikan LANGSUNG isi draf tulisan yang siap disalin tanpa teks sapaan pembuka (seperti 'Halo', 'Berikut adalah draf...') atau teks penutup. Tulis secara mendalam, rapi, dan ilmiah.";
+            $prompt .= "\n\nPENTING: Berikan LANGSUNG isi draf tulisan yang siap disalin tanpa teks sapaan pembuka (seperti 'Halo', 'Berikut adalah draf...') atau teks penutup. Tulis secara mendalam, rapi, dan ilmiah.";
+        }
 
         try {
             $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}";
@@ -358,7 +382,7 @@ Ketentuan: Tulis saran teoritis dan praktis bagi pembaca, universitas, atau pene
     public function loadDraft(Request $request)
     {
         $request->validate([
-            'id' => 'required|string',
+            'id' => 'required',
             'source' => 'required|string|in:database,file'
         ]);
 
@@ -396,7 +420,7 @@ Ketentuan: Tulis saran teoritis dan praktis bagi pembaca, universitas, atau pene
     public function deleteDraft(Request $request)
     {
         $request->validate([
-            'id' => 'required|string',
+            'id' => 'required',
             'source' => 'required|string|in:database,file'
         ]);
 

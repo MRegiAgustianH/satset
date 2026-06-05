@@ -4,8 +4,9 @@ import {
   GraduationCap, Moon, Sun, Sliders, FileText, BookOpen, Sparkles, 
   Save, FolderOpen, Printer, ZoomIn, ZoomOut, Info, AlertCircle, 
   Check, Loader2, Database, Plus, Trash2, Search, Table, Image as ImageIcon,
-  Compass, List
+  Compass, List, RotateCcw, Wand2
 } from 'lucide-react';
+import mammoth from 'mammoth';
 
 const escapeHtml = (unsafe) => {
   if (!unsafe) return '';
@@ -152,6 +153,8 @@ export default function Index() {
   // ==========================================================================
   
   const [theme, setTheme] = useState('dark');
+  const [showWelcomeModal, setShowWelcomeModal] = useState(true);
+  const [hasLocalDraft, setHasLocalDraft] = useState(false);
   
   // Thesis Layout Config
   const [layout, setLayout] = useState({
@@ -420,7 +423,8 @@ export default function Index() {
           headingLevel: 2,
           title: 'Sub-Bab Baru',
           content: '',
-          page: 1
+          page: 1,
+          numberingStyle: 'bab_prefix_dot'
         };
       }
       
@@ -659,38 +663,184 @@ export default function Index() {
     );
   };
 
-  const getAIWriteButton = (id) => {
-    const mapping = {
-      'b1s1': { key: 'latar_belakang', label: 'Latar Belakang' },
-      'b1s2': { key: 'identifikasi_masalah', label: 'Identifikasi Masalah' },
-      'b1s3': { key: 'rumusan_masalah', label: 'Rumusan Masalah' },
-      'b2s1': { key: 'penelitian_terdahulu', label: 'Kajian Pustaka' },
-      'b2s2': { key: 'grand_theory', label: 'Grand Theory' },
-      'b2s3': { key: 'middle_theory', label: 'Middle Theory' },
-      'b2s4': { key: 'applied_theory', label: 'Applied Theory' },
-      'b3s1': { key: 'desain_penelitian', label: 'Desain Penelitian' },
-      'b3s2': { key: 'tempat_waktu', label: 'Tempat & Waktu' },
-      'b3s3': { key: 'pengumpulan_data', label: 'Pengumpulan Data' },
-      'b3s4': { key: 'analisis_data', label: 'Analisis Data' },
-      'b4s1': { key: 'deskripsi_data', label: 'Deskripsi Data' },
-      'b4s2': { key: 'pembahasan', label: 'Pembahasan' },
-      'b5s1': { key: 'kesimpulan', label: 'Kesimpulan' },
-      'b5s2': { key: 'saran', label: 'Saran' }
-    };
-    
-    const info = mapping[id];
-    if (!info) return null;
+  // Legacy mapping for hardcoded section IDs
+  const legacySectionKeyMapping = {
+    'b1s1': 'latar_belakang',
+    'b1s2': 'identifikasi_masalah',
+    'b1s3': 'rumusan_masalah',
+    'b2s1': 'penelitian_terdahulu',
+    'b2s2': 'grand_theory',
+    'b2s3': 'middle_theory',
+    'b2s4': 'applied_theory',
+    'b3s1': 'desain_penelitian',
+    'b3s2': 'tempat_waktu',
+    'b3s3': 'pengumpulan_data',
+    'b3s4': 'analisis_data',
+    'b4s1': 'deskripsi_data',
+    'b4s2': 'pembahasan',
+    'b5s1': 'kesimpulan',
+    'b5s2': 'saran'
+  };
+
+  const getAIWriteButton = (id, babKey, sectionTitle) => {
+    // Dynamic: works for ANY section, not just hardcoded ones
+    const legacyKey = legacySectionKeyMapping[id];
+    const displayTitle = sectionTitle || 'Bagian ini';
+    const isGenerating = generatingSection === id;
     
     return (
       <button 
         type="button"
-        onClick={() => handleAIGenerateSection(info.key, info.label)} 
-        className="bg-indigo-600/10 hover:bg-indigo-650/20 text-indigo-500 dark:text-indigo-400 px-2 py-1.5 rounded-lg flex items-center gap-1 font-bold text-[9px] w-full justify-center"
+        disabled={!!generatingSection}
+        onClick={() => {
+          if (legacyKey) {
+            handleAIGenerateSection(legacyKey, displayTitle);
+          } else {
+            handleAIGenerateDynamic(babKey, id, displayTitle);
+          }
+        }} 
+        className="bg-indigo-600/10 hover:bg-indigo-650/20 text-indigo-500 dark:text-indigo-400 px-2 py-1.5 rounded-lg flex items-center gap-1 font-bold text-[9px] w-full justify-center disabled:opacity-40"
       >
-        {generatingSection === info.key ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+        {isGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
         AI Tulis
       </button>
     );
+  };
+
+  // Reset to outline: strips paragraph content, keeps headings/titles only
+  const handleResetToOutline = () => {
+    if (!confirm('⚠️ Peringatan: Fitur ini akan menghapus SEMUA isi paragraf dari seluruh BAB, menyisakan hanya judul heading/sub-bab saja. Anda dapat menggunakan tombol "AI Tulis" pada tiap bagian untuk mengisi ulang konten.\n\nLanjutkan?')) return;
+    
+    setBabSections(prev => {
+      const reset = {};
+      Object.keys(prev).forEach(babKey => {
+        reset[babKey] = prev[babKey].map(sec => {
+          if (sec.type === 'text') {
+            return { ...sec, content: '' };
+          }
+          return sec; // keep tables & figures intact
+        });
+      });
+      saveLocalDraft({ babSections: reset });
+      return reset;
+    });
+    showToast('Outline berhasil di-reset! Isi paragraf dihapus. Gunakan tombol "AI Tulis" di tiap bagian untuk generate konten.');
+  };
+
+  const handleCreateNewBlankDraft = () => {
+    // Reset layout defaults
+    const blankLayout = {
+      preset: 'dikti',
+      marginTop: 4.0,
+      marginLeft: 4.0,
+      marginBottom: 3.0,
+      marginRight: 3.0,
+      fontFamily: "'Times New Roman', Times, serif",
+      fontSize: '12pt',
+      lineSpacing: '2.0',
+      textAlign: 'justify',
+      pageNumPosition: 'flexible',
+      hideCoverNum: true,
+      romanPrelims: true,
+      paragraphIndent: 'indented',
+      coverAuthorLabel: 'Oleh :',
+      showPersetujuan: false,
+      showPengesahan: false,
+      showPernyataan: false,
+      showAbstractIndo: false,
+      showAbstractEng: false
+    };
+    setLayout(blankLayout);
+
+    // Reset cover default blank fields
+    const blankCover = {
+      title: 'JUDUL SKRIPSI/TUGAS AKHIR MAHASISWA',
+      subtitle: 'SKRIPSI',
+      author: '',
+      nim: '',
+      prodi: '',
+      fakultas: '',
+      univ: '',
+      city: 'JAKARTA',
+      year: new Date().getFullYear().toString(),
+      logoType: 'default',
+      logoData: null
+    };
+    setCover(blankCover);
+
+    const blankCoverElements = [
+      { id: 'ce1', type: 'title', value: 'JUDUL SKRIPSI/TUGAS AKHIR MAHASISWA', fontSize: '14pt', bold: true, uppercase: true, field: 'title' },
+      { id: 'ce_sp1', type: 'spacing', height: '1.5cm' },
+      { id: 'ce2', type: 'label', value: 'SKRIPSI', fontSize: '12pt', bold: true, uppercase: true, field: 'subtitle' },
+      { id: 'ce_sp2', type: 'spacing', height: '1.5cm' },
+      { id: 'ce3', type: 'logo', logoType: 'default', logoData: null },
+      { id: 'ce_sp3', type: 'spacing', height: '1.5cm' },
+      { id: 'ce4', type: 'label', value: 'Disusun Oleh :', fontSize: '12pt', bold: false, uppercase: false, field: '' },
+      { id: 'ce5', type: 'text', value: '', fontSize: '12pt', bold: true, uppercase: true, underline: true, field: 'author' },
+      { id: 'ce6', type: 'text', value: '', fontSize: '12pt', bold: true, uppercase: false, underline: false, field: 'nim' },
+      { id: 'ce7', type: 'spacing', height: '2cm' },
+      { id: 'ce8', type: 'text', value: '', fontSize: '12pt', bold: true, uppercase: true, field: 'prodi' },
+      { id: 'ce9', type: 'text', value: '', fontSize: '12pt', bold: true, uppercase: true, field: 'fakultas' },
+      { id: 'ce10', type: 'text', value: '', fontSize: '12pt', bold: true, uppercase: true, field: 'univ' },
+      { id: 'ce11', type: 'text', value: `JAKARTA, ${new Date().getFullYear()}`, fontSize: '12pt', bold: true, uppercase: true, field: 'city_year' },
+    ];
+    setCoverElements(blankCoverElements);
+
+    // Reset chapters to template kosongan (empty paragraph content but keeping headings structure)
+    const blankBabSections = {
+      bab1: [
+        { id: 'b1s1', type: 'text', headingLevel: 2, title: 'Latar Belakang Masalah', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b1s2', type: 'text', headingLevel: 2, title: 'Identifikasi Masalah', content: '', page: 2, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b1s3', type: 'text', headingLevel: 2, title: 'Rumusan Masalah', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
+      ],
+      bab2: [
+        { id: 'b2s1', type: 'text', headingLevel: 2, title: 'Penelitian Terdahulu / Kajian Pustaka', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b2s2', type: 'text', headingLevel: 2, title: 'Grand Theory (Teori Utama)', content: '', page: 2, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b2s3', type: 'text', headingLevel: 2, title: 'Middle Range Theory (Teori Menengah)', content: '', page: 2, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b2s4', type: 'text', headingLevel: 2, title: 'Applied / Micro Theory', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
+      ],
+      bab3: [
+        { id: 'b3s1', type: 'text', headingLevel: 2, title: 'Desain / Pendekatan Penelitian', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b3s2', type: 'text', headingLevel: 2, title: 'Tempat dan Waktu Penelitian', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b3s3', type: 'text', headingLevel: 2, title: 'Metode Pengumpulan Data', content: '', page: 2, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b3s4', type: 'text', headingLevel: 2, title: 'Metode Analisis Data', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
+      ],
+      bab4: [
+        { id: 'b4s1', type: 'text', headingLevel: 2, title: 'Deskripsi dan Analisis Data', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b4s2', type: 'text', headingLevel: 2, title: 'Pembahasan Hasil Penelitian', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
+      ],
+      bab5: [
+        { id: 'b5s1', type: 'text', headingLevel: 2, title: 'Kesimpulan Penelitian', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b5s2', type: 'text', headingLevel: 2, title: 'Saran', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
+      ]
+    };
+    setBabSections(blankBabSections);
+    setReferences([]);
+    setAbstrakIndo('');
+    setAbstrakIndoKeywords('');
+    setAbstrakEng('');
+    setAbstrakEngKeywords('');
+
+    // Save to local storage
+    const blankState = {
+      layout: blankLayout,
+      cover: blankCover,
+      coverElements: blankCoverElements,
+      babSections: blankBabSections,
+      references: [],
+      refStyle: 'apa',
+      tables: [],
+      figures: [],
+      abstrakIndo: '',
+      abstrakIndoKeywords: '',
+      abstrakEng: '',
+      abstrakEngKeywords: '',
+      headingStyles
+    };
+    localStorage.setItem('skripsi_laravel_draft_v2', JSON.stringify(blankState));
+    setHasLocalDraft(true);
+    setShowWelcomeModal(false);
+    showToast('Dokumen baru berhasil dibuat dengan template kosong.');
   };
 
   // Abstracts State (Indonesian & English)
@@ -1074,6 +1224,7 @@ export default function Index() {
       if (localDraft) {
         const parsed = JSON.parse(localDraft);
         if (parsed && typeof parsed === 'object') {
+          setHasLocalDraft(true);
           if (parsed.layout) setLayout(prev => ({ ...prev, ...parsed.layout }));
           if (parsed.cover) setCover(prev => ({ ...prev, ...parsed.cover }));
           if (parsed.coverElements) setCoverElements(parsed.coverElements);
@@ -1706,6 +1857,10 @@ export default function Index() {
   const executeWordExport = (pageIds, filename) => {
     let combinedHtml = '';
     
+    const cleanFontFamily = layout.fontFamily ? layout.fontFamily.split(',')[0].replace(/['"]/g, "").trim() : 'Times New Roman';
+    const spacingNum = parseFloat(layout.lineSpacing || '2.0');
+    const wordLineHeight = Math.round(spacingNum * 100) + '%';
+    
     pageIds.forEach((pageId, idx) => {
       const pageEl = document.getElementById(`page-${pageId}`);
       if (pageEl) {
@@ -1723,42 +1878,64 @@ export default function Index() {
           }
         });
         
+        // Ensure image sizes are preserved in Word
+        contentClone.querySelectorAll('img').forEach(img => {
+          if (!img.getAttribute('width')) {
+             if (img.classList.contains('max-w-[5.5cm]')) {
+                 img.setAttribute('width', '200');
+                 img.setAttribute('height', '200');
+             } else {
+                 img.setAttribute('width', '400');
+             }
+          }
+        });
+
         // Transform dynamic flex lists to borderless 2-column Word-friendly tables
         contentClone.querySelectorAll('.flex').forEach(flexEl => {
           const bulletSpan = flexEl.querySelector('.w-8');
           const textSpan = flexEl.querySelector('.flex-1');
           if (bulletSpan && textSpan) {
-            const table = document.createElement('table');
-            table.setAttribute('border', '0');
-            table.setAttribute('cellspacing', '0');
-            table.setAttribute('cellpadding', '0');
-            table.style.border = 'none';
-            table.style.width = '100%';
-            table.style.marginBottom = '6pt';
+            const p = document.createElement('p');
+            p.style.margin = '0';
+            p.style.marginLeft = '1cm';
+            p.style.textIndent = '-1cm';
+            p.style.textAlign = 'justify';
             
-            const tr = document.createElement('tr');
-            tr.style.border = 'none';
+            p.innerHTML = `<span style="font-weight:bold;">${bulletSpan.innerHTML.trim()}</span><span style="mso-tab-count:1">&#9;</span>${textSpan.innerHTML.trim()}`;
             
-            const tdBullet = document.createElement('td');
-            tdBullet.style.border = 'none';
-            tdBullet.style.verticalAlign = 'top';
-            tdBullet.style.width = '0.8cm';
-            tdBullet.style.padding = '0px';
-            tdBullet.style.fontWeight = 'bold';
-            tdBullet.innerHTML = bulletSpan.innerHTML;
+            flexEl.parentNode.replaceChild(p, flexEl);
+          } else if (flexEl.classList.contains('justify-between') && flexEl.classList.contains('items-baseline')) {
+            const titleContainer = flexEl.children[0];
+            const pageNumContainer = flexEl.children[1];
             
-            const tdText = document.createElement('td');
-            tdText.style.border = 'none';
-            tdText.style.verticalAlign = 'top';
-            tdText.style.padding = '0px';
-            tdText.style.textAlign = 'justify';
-            tdText.innerHTML = textSpan.innerHTML;
-            
-            tr.appendChild(tdBullet);
-            tr.appendChild(tdText);
-            table.appendChild(tr);
-            
-            flexEl.parentNode.replaceChild(table, flexEl);
+            if (titleContainer && pageNumContainer) {
+              const p = document.createElement('p');
+              p.style.margin = '0';
+              p.style.marginBottom = '2pt';
+              p.style.textAlign = 'left';
+              
+              if (flexEl.style.paddingLeft) {
+                p.style.marginLeft = flexEl.style.paddingLeft;
+              }
+              if (flexEl.classList.contains('mt-3')) {
+                p.style.marginTop = '12pt';
+              }
+              if (flexEl.classList.contains('font-bold')) {
+                p.style.fontWeight = 'bold';
+              }
+              
+              const contentWidth = 21.0 - (parseFloat(layout.marginLeft) || 4.0) - (parseFloat(layout.marginRight) || 3.0);
+              // NATIVE WORD DOT LEADER (relies on .toc-item class in <style> block)
+              p.classList.add('toc-item');
+              
+              const titleSpan = titleContainer.querySelector('.pr-2');
+              const titleHtml = titleSpan ? titleSpan.innerHTML : titleContainer.innerHTML;
+              const pageHtml = pageNumContainer.innerHTML;
+              
+              p.innerHTML = `${titleHtml}<span style="mso-tab-count:1">&#9;</span>${pageHtml}`;
+              
+              flexEl.parentNode.replaceChild(p, flexEl);
+            }
           }
         });
 
@@ -1780,10 +1957,12 @@ export default function Index() {
           let style = '';
           if (el.classList.contains('text-center') || el.style.textAlign === 'center') {
             style += 'text-align: center; ';
+            el.setAttribute('align', 'center');
           } else if (el.classList.contains('text-justify') || el.style.textAlign === 'justify') {
             style += 'text-align: justify; ';
           } else if (el.classList.contains('text-right') || el.style.textAlign === 'right') {
             style += 'text-align: right; ';
+            el.setAttribute('align', 'right');
           }
           
           if (el.classList.contains('font-bold') || el.tagName === 'H1' || el.tagName === 'H2' || el.tagName === 'H3' || el.tagName === 'H4') {
@@ -1799,7 +1978,7 @@ export default function Index() {
             style += 'text-transform: uppercase; ';
           }
           
-          style += `font-family: ${layout.fontFamily ? layout.fontFamily.replace(/'/g, "") : 'Times New Roman'}; `;
+          style += `font-family: ${cleanFontFamily}; `;
           
           // Style headings dynamically from headingStyles if matched
           const tagNameLower = el.tagName.toLowerCase();
@@ -1809,6 +1988,7 @@ export default function Index() {
             style += `font-weight: ${hStyle.fontWeight || 'bold'}; `;
             style += `font-style: ${hStyle.fontStyle || 'normal'}; `;
             style += `text-align: ${hStyle.textAlign || 'center'}; `;
+            el.setAttribute('align', hStyle.textAlign || 'center');
             if (hStyle.uppercase) {
               style += `text-transform: uppercase; `;
             }
@@ -1833,7 +2013,7 @@ export default function Index() {
               if (el.tagName === 'TD' || el.tagName === 'TH') {
                 style += 'line-height: 1.5; '; // Tables generally use single/1.5 spacing
               } else {
-                style += `line-height: ${layout.lineSpacing || '2.0'}; `;
+                style += `line-height: ${wordLineHeight}; `;
               }
             }
           }
@@ -1846,6 +2026,7 @@ export default function Index() {
               style += 'text-indent: 0cm; ';
             }
             style += 'margin-bottom: 0pt; ';
+            style += `line-height: ${wordLineHeight}; `;
           }
           
           // Style tables dynamically to prevent adding ugly borders to layout alignment tables (e.g. Persetujuan)
@@ -1878,14 +2059,21 @@ export default function Index() {
           }
         });
         
-        if (idx > 0) {
-          combinedHtml += '<br clear="all" style="page-break-before: always; mso-break-type: section-break;" />';
+        if (idx === 0) {
+          combinedHtml += '<div class="WordSection1">';
+        } else if (pageId === 'bab1-1') {
+          // Switch to WordSection2 for Arabic numbering restarting at 1
+          combinedHtml += '</div><br clear="all" style="page-break-before: always; mso-break-type: section-break;" /><div class="WordSection2">';
+        } else {
+          combinedHtml += '<br clear="all" style="page-break-before: always;" />';
         }
         
         // Removed inline margin to prevent double-margin formatting in MS Word
         combinedHtml += `<div class="word-page">${contentClone.innerHTML}</div>`;
       }
     });
+
+    if (combinedHtml) combinedHtml += '</div>';
 
     const docHtml = `
       <html xmlns:o='urn:schemas-microsoft-com:office:office' 
@@ -1912,32 +2100,65 @@ export default function Index() {
             margin: ${layout.marginTop || 4}cm ${layout.marginRight || 3}cm ${layout.marginBottom || 3}cm ${layout.marginLeft || 4}cm;
             mso-header-margin: 35.4pt;
             mso-footer-margin: 35.4pt;
+            mso-title-page: yes;
+            mso-page-numbers: 0;
+            mso-page-number-style: ${layout.romanPrelims ? 'lower-roman' : 'arabic'};
+            mso-header: h1;
+            mso-footer: f1;
             mso-paper-source: 0;
           }
-          div.WordSection1 {
-            page: WordSection1;
+          div.WordSection1 { page: WordSection1; }
+          
+          @page WordSection2 {
+            size: 21cm 29.7cm; /* A4 */
+            margin: ${layout.marginTop || 4}cm ${layout.marginRight || 3}cm ${layout.marginBottom || 3}cm ${layout.marginLeft || 4}cm;
+            mso-header-margin: 35.4pt;
+            mso-footer-margin: 35.4pt;
+            mso-page-numbers: 1;
+            mso-page-number-style: arabic;
+            mso-header: h1;
+            mso-footer: f1;
+            mso-paper-source: 0;
           }
+          div.WordSection2 { page: WordSection2; }
           body {
-            font-family: ${layout.fontFamily ? layout.fontFamily.replace(/'/g, "") : 'Times New Roman'};
-            line-height: ${layout.lineSpacing || '2.0'};
-            font-size: ${layout.fontSize || '12pt'};
+            font-family: ${cleanFontFamily};
           }
-          h1, h2, h3, h4, h5, h6 {
-            margin-top: 12pt;
-            margin-bottom: 6pt;
-            page-break-after: avoid;
-            font-family: ${layout.fontFamily ? layout.fontFamily.replace(/'/g, "") : 'Times New Roman'};
+          h1 {
+            font-size: ${headingStyles?.h1?.fontSize || '14pt'};
+            font-weight: ${headingStyles?.h1?.fontWeight || 'bold'};
+            text-align: ${headingStyles?.h1?.textAlign || 'center'};
+            font-family: ${cleanFontFamily};
+            margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
+          }
+          h2 {
+            font-size: ${headingStyles?.h2?.fontSize || '12pt'};
+            font-weight: ${headingStyles?.h2?.fontWeight || 'bold'};
+            text-align: ${headingStyles?.h2?.textAlign || 'left'};
+            font-family: ${cleanFontFamily};
+            margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
+          }
+          h3, h4, h5, h6 {
+            font-size: ${headingStyles?.h3?.fontSize || '12pt'};
+            font-weight: ${headingStyles?.h3?.fontWeight || 'bold'};
+            text-align: ${headingStyles?.h3?.textAlign || 'left'};
+            font-family: ${cleanFontFamily};
+            margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
+          }
+          .toc-item {
+            tab-stops: right dotted ${21.0 - (parseFloat(layout.marginLeft) || 4) - (parseFloat(layout.marginRight) || 3)}cm;
+            mso-tab-stops: right dotted ${21.0 - (parseFloat(layout.marginLeft) || 4) - (parseFloat(layout.marginRight) || 3)}cm;
           }
           p {
             margin-bottom: 6pt;
-            line-height: ${layout.lineSpacing || '2.0'};
+            line-height: ${wordLineHeight};
             text-align: justify;
             text-indent: 0cm;
           }
           p.paragraph-content {
             text-indent: ${layout.paragraphIndent === 'indented' ? '1.25cm' : '0cm'};
             margin-bottom: 0pt;
-            line-height: ${layout.lineSpacing || '2.0'};
+            line-height: ${wordLineHeight};
           }
           table {
             border-collapse: collapse;
@@ -1945,16 +2166,25 @@ export default function Index() {
           }
           td, th {
             padding: 6px;
-            font-family: ${layout.fontFamily ? layout.fontFamily.replace(/'/g, "") : 'Times New Roman'};
+            font-family: ${cleanFontFamily};
             font-size: ${layout.fontSize || '12pt'};
             line-height: 1.5;
           }
         </style>
       </head>
       <body>
-        <div class="WordSection1">
-          ${combinedHtml}
+        <!-- Header and Footer definitions -->
+        <div style='mso-element:header' id='h1'>
+          <p class='MsoHeader' style='text-align: ${layout.pageNumPosition === 'top-right' ? 'right' : 'center'}; margin: 0;'>
+            ${layout.pageNumPosition === 'top-right' ? `<span style='mso-field-code:" PAGE "'></span>` : ''}
+          </p>
         </div>
+        <div style='mso-element:footer' id='f1'>
+          <p class='MsoFooter' style='text-align: ${layout.pageNumPosition === 'bottom-right' ? 'right' : 'center'}; margin: 0;'>
+            ${layout.pageNumPosition !== 'top-right' ? `<span style='mso-field-code:" PAGE "'></span>` : ''}
+          </p>
+        </div>
+        ${combinedHtml}
       </body>
       </html>
     `;
@@ -2199,9 +2429,9 @@ export default function Index() {
     const bab1StartIndex = visiblePages.indexOf('bab1-1');
     if (bab1StartIndex === -1) return '';
 
-    // Preliminary sections (before bab1-1) get Roman numbers starting from 2 (ii)
+    // Preliminary sections (before bab1-1) get Roman numbers starting from 1 (i)
     if (idx < bab1StartIndex) {
-      return layout.romanPrelims ? toRoman(idx + 1) : String(idx + 1);
+      return layout.romanPrelims ? toRoman(idx) : String(idx);
     }
 
     // Chapters start from page 1 at bab1-1
@@ -2435,6 +2665,214 @@ export default function Index() {
   };
 
   // ==========================================================================
+  // DOCX IMPORT LOGIC
+  // ==========================================================================
+
+  const handleDocxImport = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!confirm('Peringatan: Mengimpor dokumen Word akan menimpa seluruh konten BAB yang ada saat ini. Lanjutkan?')) {
+      e.target.value = ''; // Reset input
+      return;
+    }
+
+    showToast('Sedang memproses dokumen Word...');
+    
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const result = await mammoth.convertToHtml({ arrayBuffer });
+      const html = result.value; // The generated HTML
+
+      // Create a temporary div to parse the HTML
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = html;
+
+      // Pre-scan elements to see if there are explicit "BAB I", "BAB II", etc.
+      let hasExplicitChapters = false;
+      Array.from(tempDiv.childNodes).forEach(node => {
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        const textContent = node.textContent.trim();
+        const babMatch = textContent.match(/^BAB\s*(I{1,3}|IV|V|VI|1|2|3|4|5|6)\b/i);
+        if (babMatch && textContent.length < 100) {
+          hasExplicitChapters = true;
+        }
+      });
+
+      const newBabSections = {
+        bab1: [],
+        bab2: [],
+        bab3: [],
+        bab4: [],
+        bab5: []
+      };
+
+      let currentBabIndex = 0; // 0 = bab1, 1 = bab2... up to 4
+      const babKeys = ['bab1', 'bab2', 'bab3', 'bab4', 'bab5'];
+      
+      let currentSectionId = null;
+      let currentContent = [];
+
+      const flushSection = () => {
+        if (currentSectionId && currentContent.length > 0) {
+          const bKey = babKeys[currentBabIndex];
+          if (bKey) {
+            const sec = newBabSections[bKey].find(s => s.id === currentSectionId);
+            if (sec) {
+              sec.content = currentContent.join('\n\n');
+            }
+          }
+        }
+        currentContent = [];
+      };
+
+      // Default section for files that do not start with a heading
+      currentSectionId = 'import_' + Date.now() + Math.random();
+      newBabSections[babKeys[currentBabIndex]].push({
+        id: currentSectionId,
+        type: 'text',
+        title: 'Bagian Pendahuluan',
+        content: '',
+        headingLevel: 0,
+        numberingStyle: 'none'
+      });
+
+      let isSkipMode = false;
+      let hasHitFirstBab = false;
+      let hasHitExplicitBab = false;
+
+      Array.from(tempDiv.childNodes).forEach(node => {
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        
+        const tagName = node.tagName.toLowerCase();
+        const textContent = node.textContent.trim();
+        
+        if (!textContent && tagName !== 'img') return;
+
+        // Skip Table of Contents entries entirely (contain dot leaders or page numbers at the end)
+        const isLikelyTocEntry = /[\.\s_]{5,}\d+$/m.test(textContent) || /\.{4,}/.test(textContent);
+        if (isLikelyTocEntry) {
+          return;
+        }
+
+        // Skip front matter so it doesn't mess up chapter detection
+        const isFrontMatterHeading = (tagName === 'h1' || tagName === 'h2' || tagName === 'p') && 
+                                     textContent.length < 100 &&
+                                     /^(kata pengantar|ucapan terima kasih|daftar isi|daftar tabel|daftar gambar|daftar simbol|daftar lambang|daftar singkatan|daftar istilah|abstrak|abstract|halaman pengesahan|halaman persetujuan|lembar pengesahan|lembar persetujuan|pernyataan|motto|persembahan)/i.test(textContent);
+        
+        if (isFrontMatterHeading) {
+           isSkipMode = true;
+           return;
+        }
+
+        // Smart BAB Detection: looks for "BAB I", "BAB 1", etc.
+        const babMatch = textContent.match(/^BAB\s*(I{1,3}|IV|V|VI|1|2|3|4|5|6)\b/i);
+        let explicitBabIndex = -1;
+
+        if (babMatch && textContent.length < 100) {
+          const numStr = babMatch[1].toUpperCase();
+          if (numStr === 'I' || numStr === '1') explicitBabIndex = 0;
+          else if (numStr === 'II' || numStr === '2') explicitBabIndex = 1;
+          else if (numStr === 'III' || numStr === '3') explicitBabIndex = 2;
+          else if (numStr === 'IV' || numStr === '4') explicitBabIndex = 3;
+          else if (numStr === 'V' || numStr === '5') explicitBabIndex = 4;
+        }
+
+        if (explicitBabIndex !== -1) {
+          isSkipMode = false;
+          flushSection();
+          currentBabIndex = explicitBabIndex;
+          hasHitFirstBab = true;
+          hasHitExplicitBab = true;
+          
+          currentSectionId = 'import_' + Date.now() + Math.random();
+          newBabSections[babKeys[currentBabIndex]].push({
+            id: currentSectionId,
+            type: 'text',
+            title: textContent,
+            content: '',
+            headingLevel: 0,
+            numberingStyle: 'none'
+          });
+        } 
+        else if (tagName === 'h1') {
+          isSkipMode = false;
+          flushSection();
+          if (!hasHitFirstBab) {
+             hasHitFirstBab = true;
+          } else if (!hasExplicitChapters && currentBabIndex < 4 && newBabSections[babKeys[currentBabIndex]].length > 0 && 
+              (newBabSections[babKeys[currentBabIndex]][0].content !== '' || newBabSections[babKeys[currentBabIndex]].length > 1)) {
+            currentBabIndex++;
+          }
+
+          currentSectionId = 'import_' + Date.now() + Math.random();
+          newBabSections[babKeys[currentBabIndex]].push({
+            id: currentSectionId,
+            type: 'text',
+            title: textContent,
+            content: '',
+            headingLevel: 0,
+            numberingStyle: 'none'
+          });
+        } 
+        else if (tagName === 'h2' || tagName === 'h3') {
+          isSkipMode = false;
+          flushSection();
+          if (!hasHitFirstBab) hasHitFirstBab = true;
+
+          // Strip leading numbering from H2/H3 (e.g., "1.1 Latar Belakang" -> "Latar Belakang")
+          let cleanTitle = textContent.replace(/^((?:[\dA-Za-z]+[\.\)]\s*)+)/i, '').trim();
+          if (!cleanTitle) cleanTitle = textContent;
+
+          currentSectionId = 'import_' + Date.now() + Math.random();
+          
+          // Classify level and numbering style based on Indonesian thesis structure
+          const isH2 = tagName === 'h2';
+          const titleLower = cleanTitle.toLowerCase();
+          const isMainSub = /^(latar belakang|identifikasi masalah|batasan masalah|rumusan masalah|tujuan|manfaat|keaslian|sistematika|penelitian terdahulu|kajian pustaka|landasan teori|tinjauan pustaka|kerangka|hipotesis|desain|pendekatan|variabel|populasi|sampel|instrumen|pengumpulan data|analisis data|deskripsi data|pembahasan|kesimpulan|saran)/i.test(titleLower);
+          
+          const level = (isH2 || isMainSub) ? 2 : 3;
+          newBabSections[babKeys[currentBabIndex]].push({
+            id: currentSectionId,
+            type: 'text',
+            title: cleanTitle,
+            content: '',
+            headingLevel: level,
+            numberingStyle: level === 2 ? 'bab_prefix_dot' : 'bab_prefix_double_dot'
+          });
+        } 
+        else if (tagName === 'p') {
+          if (isSkipMode || !hasHitFirstBab) return;
+          currentContent.push(textContent);
+        } 
+        else if (tagName === 'ul' || tagName === 'ol') {
+          if (isSkipMode || !hasHitFirstBab) return;
+          const listItems = Array.from(node.querySelectorAll('li')).map(li => '- ' + li.textContent.trim());
+          currentContent.push(listItems.join('\n'));
+        }
+      });
+      
+      flushSection();
+
+      // Clean up empty sections
+      babKeys.forEach(k => {
+        newBabSections[k] = newBabSections[k].filter(s => s.title.trim() !== '' || s.content.trim() !== '');
+      });
+
+      setBabSections(newBabSections);
+      saveLocalDraft({ babSections: newBabSections });
+      setHasLocalDraft(true);
+      setShowWelcomeModal(false);
+      showToast('Impor dokumen Word berhasil!');
+    } catch (err) {
+      console.error(err);
+      showToast('Gagal memproses dokumen: ' + err.message, true);
+    }
+    
+    e.target.value = ''; // Reset
+  };
+
+  // ==========================================================================
   // DRAFT SAVING & PRINT INTEGRATION
   // ==========================================================================
   
@@ -2485,7 +2923,7 @@ export default function Index() {
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ id: item.id, source: item.source })
+        body: JSON.stringify({ id: String(item.id), source: item.source })
       });
 
       if (response.ok) {
@@ -2547,7 +2985,9 @@ export default function Index() {
         if (data.headingStyles) setHeadingStyles(data.headingStyles);
         
         saveLocalDraft(data);
+        setHasLocalDraft(true);
         setShowDraftsModal(false);
+        setShowWelcomeModal(false);
         showToast(`Draft "${item.title}" berhasil dimuat.`);
       }
     } catch (e) {
@@ -2580,7 +3020,7 @@ export default function Index() {
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ id: item.id, source: item.source })
+        body: JSON.stringify({ id: String(item.id), source: item.source })
       });
 
       if (response.ok) {
@@ -2597,7 +3037,10 @@ export default function Index() {
       showToast('Masukkan API Key Gemini terlebih dahulu!', true);
       return;
     }
-    setGeneratingSection(sectionKey);
+    // Find the section ID for the legacy key, and set that as generatingSection
+    const legacyToId = Object.entries(legacySectionKeyMapping).find(([, v]) => v === sectionKey);
+    const trackingId = legacyToId ? legacyToId[0] : sectionKey;
+    setGeneratingSection(trackingId);
     showToast(`Menghubungi Gemini untuk draf ${displayTitle}...`);
 
     try {
@@ -2640,6 +3083,52 @@ export default function Index() {
       else if (sectionKey === 'saran') updateSectionContentById('bab5', 'b5s2', content);
 
       showToast(`Konten ${displayTitle} berhasil ditulis oleh AI!`);
+    } catch (e) {
+      showToast('Koneksi terganggu: ' + e.message, true);
+    } finally {
+      setGeneratingSection(null);
+    }
+  };
+
+  // Dynamic AI generation for any section (e.g., imported from DOCX)
+  const handleAIGenerateDynamic = async (babKey, sectionId, sectionTitle) => {
+    if (!apiKey) {
+      showToast('Masukkan API Key Gemini terlebih dahulu!', true);
+      return;
+    }
+    setGeneratingSection(sectionId);
+    showToast(`Menghubungi Gemini untuk draf "${sectionTitle}"...`);
+
+    // Determine bab number and context
+    const babNum = babKey.replace('bab', '');
+    const babNames = { '1': 'PENDAHULUAN', '2': 'TINJAUAN PUSTAKA', '3': 'METODOLOGI PENELITIAN', '4': 'HASIL DAN PEMBAHASAN', '5': 'PENUTUP' };
+    const babContext = `BAB ${babNum} (${babNames[babNum] || 'Bab ' + babNum})`;
+
+    try {
+      const response = await fetch('/thesis/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Gemini-Key': apiKey
+        },
+        body: JSON.stringify({
+          title: cover.title,
+          section: '__dynamic__',
+          section_title: sectionTitle,
+          bab_context: babContext,
+          topik: aiInputs.topik,
+          metode: tables.length > 0 ? 'Fuzzy/KNN/PLS-SEM' : 'Metode Deskriptif'
+        })
+      });
+
+      const resData = await response.json();
+      if (!response.ok) {
+        showToast(resData.error || 'Gagal menghasilkan konten.', true);
+        return;
+      }
+
+      updateSectionContentById(babKey, sectionId, resData.content);
+      showToast(`Konten "${sectionTitle}" berhasil ditulis oleh AI!`);
     } catch (e) {
       showToast('Koneksi terganggu: ' + e.message, true);
     } finally {
@@ -3314,7 +3803,7 @@ export default function Index() {
                   <div className="space-y-4">
                     <div className="flex justify-between items-center bg-indigo-600/10 p-2.5 rounded-xl border border-indigo-500/20">
                       <span className="font-bold text-[10px] uppercase text-indigo-555 dark:text-indigo-400">Kelola Sub-Bab & Konten</span>
-                      <div className="flex gap-1">
+                      <div className="flex gap-1 flex-wrap">
                         <button 
                           onClick={() => handleAddSection(activeSection, 'text')} 
                           className="bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded flex items-center gap-1 font-bold text-[9px]"
@@ -3332,6 +3821,13 @@ export default function Index() {
                           className="bg-indigo-700 hover:bg-indigo-800 text-white px-2 py-1 rounded flex items-center gap-1 font-bold text-[9px]"
                         >
                           <ImageIcon className="h-3 w-3" /> Gambar
+                        </button>
+                        <button 
+                          onClick={handleResetToOutline} 
+                          className="bg-amber-600 hover:bg-amber-700 text-white px-2 py-1 rounded flex items-center gap-1 font-bold text-[9px]"
+                          title="Hapus semua isi paragraf, sisakan judul heading saja"
+                        >
+                          <RotateCcw className="h-3 w-3" /> Reset Outline
                         </button>
                       </div>
                     </div>
@@ -3481,7 +3977,15 @@ export default function Index() {
                                     <label className="text-[9px] text-slate-400 block mb-0.5">Heading</label>
                                     <select 
                                       value={sec.headingLevel} 
-                                      onChange={e => handleUpdateSectionField(activeSection, sec.id, 'headingLevel', parseInt(e.target.value))} 
+                                      onChange={e => {
+                                        const level = parseInt(e.target.value);
+                                        handleUpdateSectionField(activeSection, sec.id, 'headingLevel', level);
+                                        if (level === 2) {
+                                          handleUpdateSectionField(activeSection, sec.id, 'numberingStyle', 'bab_prefix_dot');
+                                        } else if (level === 3) {
+                                          handleUpdateSectionField(activeSection, sec.id, 'numberingStyle', 'bab_prefix_double_dot');
+                                        }
+                                      }} 
                                       className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
                                     >
                                       <option value={0}>Isi Saja</option>
@@ -3526,7 +4030,7 @@ export default function Index() {
                                 </div>
                                 
                                 <div className="pt-3.5 flex justify-end">
-                                  {getAIWriteButton(sec.id)}
+                                  {getAIWriteButton(sec.id, activeSection, sec.title)}
                                 </div>
                               </div>
 
@@ -3843,7 +4347,7 @@ export default function Index() {
           </div>
 
           {/* Sidebar Action Buttons Footer */}
-          <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/40 space-y-2">
+          <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/40 space-y-3">
             <div className="flex gap-2">
               <input type="text" value={saveFilename} onChange={e=>setSaveFilename(e.target.value)} className="flex-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-850 px-3 py-1.5 rounded-lg text-xs" />
               <button onClick={handleSaveDraftDB} className="border border-slate-250 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-900 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 text-xs"><Save className="h-4 w-4 text-slate-300" />Simpan</button>
@@ -3852,6 +4356,19 @@ export default function Index() {
             <div className="grid grid-cols-2 gap-2">
               <button onClick={()=>{fetchDraftsList(); setShowDraftsModal(true)}} className="border border-slate-250 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-900 py-2 rounded-lg font-bold flex items-center justify-center gap-1.5"><FolderOpen className="h-4 w-4" />Drafts</button>
               <button onClick={handlePrint} className="bg-indigo-600 hover:bg-indigo-700 py-2 rounded-lg font-bold text-white flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/10"><Printer className="h-4 w-4" />Unduh / Cetak</button>
+            </div>
+
+            <div>
+              <label className="w-full border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/50 dark:bg-indigo-900/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 py-2 rounded-lg font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors text-sm">
+                <FileText className="h-4 w-4" />
+                Import DOCX (Word)
+                <input 
+                  type="file" 
+                  accept=".docx" 
+                  className="hidden" 
+                  onChange={handleDocxImport} 
+                />
+              </label>
             </div>
           </div>
         </aside>
@@ -3902,7 +4419,7 @@ export default function Index() {
                       }
                       if (el.type === 'logo') {
                         return (
-                          <div key={el.id} className="flex justify-center w-full my-2">
+                          <div key={el.id} className="flex justify-center text-center w-full my-2" align="center">
                             {el.logoType === 'custom' && el.logoData ? (
                               <img src={el.logoData} className="max-h-[5.5cm] max-w-[5.5cm] object-contain" alt="Logo Kustom" />
                             ) : (
@@ -3922,6 +4439,8 @@ export default function Index() {
                         textDecoration: el.underline ? 'underline' : 'none',
                         textTransform: el.uppercase ? 'uppercase' : 'none',
                         lineHeight: '1.5',
+                        margin: '0',
+                        padding: '0',
                         fontFamily: 'var(--doc-font-family)'
                       };
 
@@ -4151,8 +4670,8 @@ export default function Index() {
                     <div>
                       <h1 className="text-[14pt] font-bold text-center uppercase mb-6">ABSTRAK</h1>
 
-                      <div className="text-[11pt] text-justify leading-relaxed" style={{ textIndent: 'var(--doc-text-indent, 1.25cm)', lineHeight: '1.0' }}>
-                        <p dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(abstrakIndo) }} />
+                      <div className="text-[11pt] text-justify leading-relaxed" style={{ textIndent: 'var(--doc-text-indent, 1.25cm)' }}>
+                        <p className="paragraph-content" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(abstrakIndo) }} />
                       </div>
                     </div>
 
@@ -4172,8 +4691,8 @@ export default function Index() {
                     <div>
                       <h1 className="text-[14pt] font-bold text-center uppercase mb-6 italic">ABSTRACT</h1>
 
-                      <div className="text-[11pt] text-justify leading-relaxed italic" style={{ textIndent: 'var(--doc-text-indent, 1.25cm)', lineHeight: '1.0' }}>
-                        <p>{abstrakEng}</p>
+                      <div className="text-[11pt] text-justify leading-relaxed italic" style={{ textIndent: 'var(--doc-text-indent, 1.25cm)' }}>
+                        <p className="paragraph-content">{abstrakEng}</p>
                       </div>
                     </div>
 
@@ -4210,7 +4729,7 @@ export default function Index() {
                               >
                                 <div className="flex items-baseline flex-1 mr-2 overflow-hidden">
                                   <span className="pr-2 relative z-10 bg-white" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(entry.title) }} />
-                                  <span className="flex-1 border-b border-dotted border-black"></span>
+                                  <span className="dot-leader"></span>
                                 </div>
                                 <span className="pl-2 font-normal text-right min-w-[25px]">{entryPageNumber}</span>
                               </div>
@@ -4236,7 +4755,7 @@ export default function Index() {
                         <div key={t.id} className="flex items-baseline justify-between">
                           <div className="flex items-baseline flex-1 mr-2 overflow-hidden">
                             <span className="pr-2 relative z-10 bg-white">{t.title}</span>
-                            <span className="flex-1 border-b border-dotted border-black"></span>
+                            <span className="dot-leader"></span>
                           </div>
                           <span className="pl-2 font-normal text-right min-w-[25px]">{babPage}</span>
                         </div>
@@ -4259,7 +4778,7 @@ export default function Index() {
                         <div key={f.id} className="flex items-baseline justify-between">
                           <div className="flex items-baseline flex-1 mr-2 overflow-hidden">
                             <span className="pr-2 relative z-10 bg-white">{f.title}</span>
-                            <span className="flex-1 border-b border-dotted border-black"></span>
+                            <span className="dot-leader"></span>
                           </div>
                           <span className="pl-2 font-normal text-right min-w-[25px]">{babPage}</span>
                         </div>
@@ -4558,6 +5077,165 @@ export default function Index() {
         <div className={`fixed bottom-6 right-6 border ${toast.isError ? 'bg-red-900/80 border-red-500 text-red-100' : 'bg-slate-900/95 border-slate-800 text-slate-100'} backdrop-blur-md px-4 py-3 rounded-xl flex items-center gap-3 shadow-2xl z-50 transition-all max-w-sm no-print`}>
           {toast.isError ? <AlertCircle className="h-5 w-5 text-red-400 shrink-0" /> : <Info className="h-5 w-5 text-indigo-400 shrink-0" />}
           <span className="text-xs font-semibold">{toast.message}</span>
+        </div>
+      )}
+
+      {/* WELCOME / GET STARTED MODAL */}
+      {showWelcomeModal && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center z-50 no-print text-slate-100 p-4">
+          <div className="bg-slate-900 border border-slate-800/80 rounded-2xl w-[680px] max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            
+            {/* Header */}
+            <div className="p-8 border-b border-slate-800/60 text-center relative bg-gradient-to-b from-indigo-500/10 to-transparent">
+              <div className="inline-flex p-3 bg-indigo-500/10 rounded-2xl mb-3 text-indigo-400 border border-indigo-500/20">
+                <GraduationCap className="h-8 w-8" />
+              </div>
+              <h2 className="text-xl font-bold text-slate-100 tracking-tight">SatSet Thesis Builder v2.0</h2>
+              <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto leading-relaxed">
+                Platform penataan format tugas akhir dan skripsi otomatis berbasis standar akademik nasional Indonesia.
+              </p>
+            </div>
+
+            {/* Content Body */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              
+              {/* Options Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                
+                <div 
+                  onClick={handleCreateNewBlankDraft}
+                  className="group relative p-5 bg-slate-950 border border-slate-850 hover:border-indigo-500/80 rounded-xl cursor-pointer transition-all flex flex-col justify-between hover:shadow-[0_0_15px_-3px_rgba(99,102,241,0.2)]"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <div className="p-1.5 bg-indigo-500/10 rounded-lg text-indigo-400 group-hover:bg-indigo-50 group-hover:text-white transition-all">
+                        <Plus className="h-4 w-4" />
+                      </div>
+                      <h3 className="font-bold text-xs text-slate-200 group-hover:text-indigo-400 transition-colors">Buat Draft Baru</h3>
+                    </div>
+                    <p className="text-[10px] text-slate-400 leading-normal">
+                      Mulai skripsi baru dari nol dengan halaman kosong. Format margin, spasi, dan struktur BAB tetap disiapkan sesuai standar (template kosongan).
+                    </p>
+                  </div>
+                  <div className="mt-4 text-[9px] font-bold text-indigo-500 flex items-center gap-1 group-hover:translate-x-1 transition-transform">
+                    Mulai Baru →
+                  </div>
+                </div>
+
+                {hasLocalDraft ? (
+                  <div 
+                    onClick={() => setShowWelcomeModal(false)}
+                    className="group relative p-5 bg-slate-950 border border-slate-850 hover:border-indigo-500/80 rounded-xl cursor-pointer transition-all flex flex-col justify-between hover:shadow-[0_0_15px_-3px_rgba(99,102,241,0.2)]"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 bg-emerald-500/10 rounded-lg text-emerald-400 group-hover:bg-emerald-50 group-hover:text-white transition-all">
+                          <RotateCcw className="h-4 w-4" />
+                        </div>
+                        <h3 className="font-bold text-xs text-slate-200 group-hover:text-emerald-400 transition-colors">Lanjutkan Sesi Terakhir</h3>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-normal">
+                        Lanjutkan pengerjaan dokumen dari sesi terakhir Anda yang tersimpan secara lokal di browser Anda saat ini.
+                      </p>
+                    </div>
+                    <div className="mt-4 text-[9px] font-bold text-emerald-500 flex items-center gap-1 group-hover:translate-x-1 transition-transform">
+                      Lanjutkan Kerja →
+                    </div>
+                  </div>
+                ) : (
+                  <label 
+                    className="group relative p-5 bg-slate-950 border border-slate-850 hover:border-indigo-500/80 rounded-xl cursor-pointer transition-all flex flex-col justify-between hover:shadow-[0_0_15px_-3px_rgba(99,102,241,0.2)]"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 bg-indigo-500/10 rounded-lg text-indigo-400 group-hover:bg-indigo-50 group-hover:text-white transition-all">
+                          <FolderOpen className="h-4 w-4" />
+                        </div>
+                        <h3 className="font-bold text-xs text-slate-200 group-hover:text-indigo-400 transition-colors">Impor dari file Word</h3>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-normal">
+                        Unggah file dokumen Microsoft Word (.docx) Anda. Sistem akan memindai isi halaman dan memetakan struktur bab secara otomatis.
+                      </p>
+                    </div>
+                    <div className="mt-4 text-[9px] font-bold text-indigo-500 flex items-center gap-1">
+                      Pilih File DOCX...
+                    </div>
+                    <input 
+                      type="file" 
+                      accept=".docx" 
+                      className="hidden" 
+                      onChange={handleDocxImport} 
+                    />
+                  </label>
+                )}
+
+              </div>
+
+              {/* Already Have a Draft: Database / Upload Option */}
+              <div className="border-t border-slate-800/60 pt-5 space-y-4">
+                <div className="flex justify-between items-center">
+                  <h4 className="font-bold text-xs text-slate-400 flex items-center gap-1.5">
+                    <Database className="h-4 w-4 text-indigo-400" />
+                    Buka Draft dari Database
+                  </h4>
+                  {hasLocalDraft && (
+                    <label className="text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer flex items-center gap-1">
+                      <FolderOpen className="h-3 w-3" />
+                      Upload DOCX
+                      <input 
+                        type="file" 
+                        accept=".docx" 
+                        className="hidden" 
+                        onChange={handleDocxImport} 
+                      />
+                    </label>
+                  )}
+                </div>
+
+                <div className="max-h-[220px] overflow-y-auto space-y-2 pr-1">
+                  {loadingDrafts ? (
+                    <div className="flex flex-col items-center justify-center py-6 gap-2 text-slate-400">
+                      <Loader2 className="h-5 w-5 animate-spin text-indigo-500" />
+                      <span className="text-[10px]">Memuat daftar draft...</span>
+                    </div>
+                  ) : draftsList.length === 0 ? (
+                    <div className="text-center py-8 text-slate-500 italic text-[10px] bg-slate-950/40 border border-slate-850 rounded-xl">
+                      Belum ada draft tersimpan di database.
+                    </div>
+                  ) : (
+                    draftsList.map((item) => (
+                      <div 
+                        key={item.key} 
+                        onClick={() => handleLoadDraftDB(item)}
+                        className="p-3 rounded-lg border border-slate-850 hover:border-indigo-500 bg-slate-950/40 hover:bg-slate-950 flex justify-between items-center cursor-pointer transition-all text-xs"
+                      >
+                        <div className="flex-1 min-w-0 pr-4">
+                          <h5 className="font-bold text-[11px] truncate text-slate-200">"{item.title}"</h5>
+                          <p className="text-[9px] text-slate-400 mt-0.5">Penulis: {item.author} • {item.updated_at}</p>
+                        </div>
+                        
+                        <div className="flex items-center gap-2">
+                          <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${item.source === 'database' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-blue-500/10 text-blue-400'}`}>
+                            {item.source}
+                          </span>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteDraftDB(e, item);
+                            }} 
+                            className="p-1 hover:bg-slate-850 text-slate-500 hover:text-red-500 rounded"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+            </div>
+          </div>
         </div>
       )}
     </>
