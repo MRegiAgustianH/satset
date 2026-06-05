@@ -1,0 +1,155 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* A4 Page Formatting for preview on screen and print */
+.a4-page {
+  width: 21cm;
+  height: 29.7cm;
+  background-color: #ffffff !important; /* Always white background */
+  color: #000000 !important; /* Always black text */
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.15), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  box-sizing: border-box;
+  page-break-after: always;
+  position: relative;
+  overflow: hidden;
+}
+
+.a4-page *,
+.a4-page p,
+.a4-page span,
+.a4-page div,
+.a4-page h2,
+.a4-page h3,
+.a4-page table,
+.a4-page th,
+.a4-page td {
+  color: #000000 !important; /* Force black text color inside the document preview */
+  border-color: #000000 !important; /* Ensure academic borders are black, not white */
+}
+
+/* Page inner content wrapper applying margins, typography, alignment, and line spacing */
+.page-content {
+  height: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  padding-top: var(--doc-margin-top, 4cm);
+  padding-left: var(--doc-margin-left, 4cm);
+  padding-bottom: var(--doc-margin-bottom, 3cm);
+  padding-right: var(--doc-margin-right, 3cm);
+  font-family: var(--doc-font-family, 'Times New Roman', Times, serif) !important;
+  font-size: var(--doc-font-size, 12pt) !important;
+  line-height: var(--doc-line-spacing, 2.0) !important;
+  text-align: var(--doc-text-align, justify) !important;
+  word-wrap: break-word !important;
+  overflow-wrap: break-word !important;
+  word-break: normal !important;
+}
+
+/* Indented paragraphs inside thesis content */
+.page-content .paragraph-content {
+  text-indent: var(--doc-text-indent, 1.25cm);
+  margin-bottom: 0px;
+  text-align: justify;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+/* Academic Table Formatting (APA / DIKTI format) */
+.a4-page .academic-table {
+  border-collapse: collapse !important;
+  border-top: 1.5pt solid #000000 !important;
+  border-bottom: 1.5pt solid #000000 !important;
+  border-left: none !important;
+  border-right: none !important;
+  width: 100% !important;
+}
+
+.a4-page .academic-table thead tr {
+  border-bottom: 1pt solid #000000 !important;
+}
+
+.a4-page .academic-table th {
+  border: none !important;
+  font-weight: bold !important;
+  padding: 4px 6px !important;
+}
+
+.a4-page .academic-table td {
+  border: none !important;
+  padding: 4px 6px !important;
+}
+
+.a4-page .academic-table tbody tr {
+  border-bottom: 0.5px solid #e2e8f0 !important;
+}
+
+.a4-page .academic-table tbody tr:last-child {
+  border-bottom: none !important;
+}
+
+/* Page number styling - uses document font (Times New Roman) */
+.page-number {
+  font-family: var(--doc-font-family, 'Times New Roman', Times, serif) !important;
+}
+
+/* Print Specific Optimizations */
+@media print {
+  /* Reset outer layout structures for printing */
+  html, body, #app, main {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    width: auto !important;
+    overflow: visible !important;
+    display: block !important;
+    position: static !important;
+    background: #ffffff !important;
+  }
+
+  /* Reset outer flex and viewport height wrappers of the editor app */
+  div.h-screen,
+  div.w-screen,
+  div.origin-top,
+  #app > div {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    width: auto !important;
+    overflow: visible !important;
+    display: block !important;
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  .no-print, .no-print-custom {
+    display: none !important;
+  }
+
+  main {
+    padding: 0 !important;
+    background: transparent !important;
+  }
+
+  .a4-page {
+    box-shadow: none !important;
+    margin: 0 !important;
+    border: none !important;
+    page-break-after: always;
+    display: block !important;
+    position: relative !important;
+    background-color: #ffffff !important;
+  }
+
+  /* Remove transform scale during print */
+  div[style*="transform"] {
+    transform: none !important;
+  }
+}
