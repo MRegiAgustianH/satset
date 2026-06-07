@@ -4091,12 +4091,51 @@ export default function Index() {
     
     try {
       const arrayBuffer = await file.arrayBuffer();
-      const result = await mammoth.convertToHtml({ arrayBuffer });
-      const html = result.value; // The generated HTML
+
+      // Detect file format: real .docx is a ZIP archive (starts with "PK" = 0x50 0x4B),
+      // while our exported .doc is an HTML-based Word file (plain text/HTML).
+      const headerBytes = new Uint8Array(arrayBuffer.slice(0, 4));
+      const isZipDocx = headerBytes[0] === 0x50 && headerBytes[1] === 0x4B; // "PK"
+
+      let html;
+      if (isZipDocx) {
+        // Real .docx (OOXML) — parse with mammoth
+        const result = await mammoth.convertToHtml({ arrayBuffer });
+        html = result.value;
+      } else {
+        // HTML-based .doc (our own export) — decode the text and use its HTML directly
+        const decoder = new TextDecoder('utf-8');
+        let rawHtml = decoder.decode(arrayBuffer);
+        // Strip BOM if present
+        rawHtml = rawHtml.replace(/^\ufeff/, '');
+        // Extract body content if a full HTML document, otherwise use as-is
+        const bodyMatch = rawHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+        html = bodyMatch ? bodyMatch[1] : rawHtml;
+      }
 
       // Create a temporary div to parse the HTML
       const tempDiv = document.createElement('div');
       tempDiv.innerHTML = html;
+
+      // If this is our own HTML-based export, the content is wrapped in
+      // WordSection/word-page divs with header/footer definitions. Flatten these
+      // so the import scanner sees headings/paragraphs as top-level elements.
+      if (!isZipDocx) {
+        // Remove Word header/footer field definitions
+        tempDiv.querySelectorAll('div[style*="mso-element:header"], div[style*="mso-element:footer"]').forEach(el => el.remove());
+        // Unwrap structural wrapper divs repeatedly until none remain
+        let didUnwrap = true;
+        let guard = 0;
+        while (didUnwrap && guard < 20) {
+          didUnwrap = false;
+          guard++;
+          tempDiv.querySelectorAll('div.WordSection1, div.WordSection2, div.word-page').forEach(div => {
+            while (div.firstChild) div.parentNode.insertBefore(div.firstChild, div);
+            div.remove();
+            didUnwrap = true;
+          });
+        }
+      }
 
       // Pre-scan elements to see if there are explicit "BAB I", "BAB II", etc.
       let hasExplicitChapters = false;
@@ -4134,6 +4173,42 @@ export default function Index() {
           }
         }
         currentContent = [];
+      };
+
+      // Parse an HTML <table> element into headers string + rows array
+      const parseImportedTable = (tableEl) => {
+        const trs = Array.from(tableEl.querySelectorAll('tr'));
+        if (trs.length === 0) return { headers: '', rows: [] };
+        const cellText = (tr) => Array.from(tr.children)
+          .filter(c => /^(td|th)$/i.test(c.tagName))
+          .map(c => c.textContent.trim());
+        const headers = cellText(trs[0]).join(', ');
+        const rows = trs.slice(1).map(tr => cellText(tr));
+        return { headers, rows };
+      };
+
+      // Start a fresh continuation paragraph section (used after a table/figure/equation block)
+      const startContinuationSection = (bKey) => {
+        currentSectionId = 'import_' + Date.now() + Math.random();
+        newBabSections[bKey].push({
+          id: currentSectionId,
+          type: 'text',
+          title: '',
+          content: '',
+          headingLevel: 0,
+          numberingStyle: 'none'
+        });
+      };
+
+      // Pick the most likely caption <p> inside a content wrapper div
+      // (skips the placeholder text like "[Skema / Diagram Model]")
+      const pickCaption = (wrapperEl) => {
+        const ps = Array.from(wrapperEl.querySelectorAll('p'));
+        for (let i = ps.length - 1; i >= 0; i--) {
+          const t = ps[i].textContent.trim();
+          if (t && !t.startsWith('[') && !/^keterangan/i.test(t)) return t;
+        }
+        return '';
       };
 
       // Default section for files that do not start with a heading
@@ -4230,8 +4305,9 @@ export default function Index() {
           flushSection();
           if (!hasHitFirstBab) hasHitFirstBab = true;
 
-          // Strip leading numbering from H2/H3 (e.g., "1.1 Latar Belakang" -> "Latar Belakang")
-          let cleanTitle = textContent.replace(/^((?:[\dA-Za-z]+[\.\)]\s*)+)/i, '').trim();
+          // Strip leading numbering from H2/H3 (e.g., "1.1 Latar Belakang" -> "Latar Belakang",
+          // "1.1.1 Sistem" -> "Sistem", "A. Foo" -> "Foo", "(1) Bar" -> "Bar")
+          let cleanTitle = textContent.replace(/^\s*(?:\(?\d+(?:\.\d+)*[.)]?|[A-Za-z][.)]|\([A-Za-z0-9]+\))\s+/, '').trim();
           if (!cleanTitle) cleanTitle = textContent;
 
           currentSectionId = 'import_' + Date.now() + Math.random();
@@ -4251,6 +4327,66 @@ export default function Index() {
             numberingStyle: level === 2 ? 'bab_prefix_dot' : 'bab_prefix_double_dot'
           });
         } 
+        else if (tagName === 'table' || (tagName === 'div' && node.querySelector && node.querySelector('table'))) {
+          if (isSkipMode || !hasHitFirstBab) return;
+          const tableEl = tagName === 'table' ? node : node.querySelector('table');
+          if (!tableEl) return;
+          flushSection();
+          const bKey = babKeys[currentBabIndex];
+          const border = tableEl.getAttribute('border');
+          const isEquation = border === '0' || tableEl.classList.contains('equation-table');
+
+          if (isEquation) {
+            // Equation: formula in first cell, optional title <p>, optional "Keterangan" <p>
+            const cells = Array.from(tableEl.querySelectorAll('td, th'));
+            const formula = cells[0] ? cells[0].textContent.trim() : '';
+            let title = '';
+            let description = '';
+            if (tagName === 'div') {
+              const ps = Array.from(node.querySelectorAll('p'));
+              const titleP = ps.find(p => p.textContent.trim() && !/^keterangan/i.test(p.textContent.trim()));
+              if (titleP) title = titleP.textContent.trim();
+              const ketP = ps.find(p => /keterangan/i.test(p.textContent));
+              if (ketP) description = ketP.textContent.replace(/keterangan\s*:?/i, '').trim();
+            }
+            newBabSections[bKey].push({
+              id: 'import_eq_' + Date.now() + Math.random(),
+              type: 'equation',
+              title: title || 'Rumus',
+              content: formula || 'y = f(x)',
+              description: description,
+              page: 1
+            });
+          } else {
+            const parsed = parseImportedTable(tableEl);
+            const caption = tagName === 'div' ? pickCaption(node) : '';
+            newBabSections[bKey].push({
+              id: 'import_tab_' + Date.now() + Math.random(),
+              type: 'table',
+              title: caption || 'Tabel',
+              page: 1,
+              headers: parsed.headers,
+              rows: parsed.rows,
+              rowsText: parsed.rows.map(r => r.join(', ')).join('\n')
+            });
+          }
+          startContinuationSection(bKey);
+        }
+        else if (tagName === 'img' || (tagName === 'div' && node.querySelector && node.querySelector('img')) || (tagName === 'div' && /\[Skema|Diagram/i.test(textContent))) {
+          if (isSkipMode || !hasHitFirstBab) return;
+          flushSection();
+          const bKey = babKeys[currentBabIndex];
+          const imgEl = tagName === 'img' ? node : (node.querySelector ? node.querySelector('img') : null);
+          const caption = tagName === 'div' ? pickCaption(node) : '';
+          newBabSections[bKey].push({
+            id: 'import_fig_' + Date.now() + Math.random(),
+            type: 'figure',
+            title: caption || 'Gambar',
+            page: 1,
+            imageData: imgEl && imgEl.getAttribute('src') ? imgEl.getAttribute('src') : null
+          });
+          startContinuationSection(bKey);
+        }
         else if (tagName === 'p') {
           if (isSkipMode || !hasHitFirstBab) return;
           currentContent.push(textContent);
@@ -4266,7 +4402,10 @@ export default function Index() {
 
       // Clean up empty sections
       babKeys.forEach(k => {
-        newBabSections[k] = newBabSections[k].filter(s => s.title.trim() !== '' || s.content.trim() !== '');
+        newBabSections[k] = newBabSections[k].filter(s => {
+          if (s.type !== 'text') return true; // keep tables/figures/equations
+          return (s.title || '').trim() !== '' || (s.content || '').trim() !== '';
+        });
       });
 
       setBabSections(newBabSections);
@@ -6890,7 +7029,7 @@ export default function Index() {
                 Import DOCX (Word)
                 <input 
                   type="file" 
-                  accept=".docx" 
+                  accept=".docx,.doc" 
                   className="hidden" 
                   onChange={handleDocxImport} 
                 />
@@ -8004,7 +8143,7 @@ export default function Index() {
                     </div>
                     <input 
                       type="file" 
-                      accept=".docx" 
+                      accept=".docx,.doc" 
                       className="hidden" 
                       onChange={handleDocxImport} 
                     />
@@ -8026,7 +8165,7 @@ export default function Index() {
                       Upload DOCX
                       <input 
                         type="file" 
-                        accept=".docx" 
+                        accept=".docx,.doc" 
                         className="hidden" 
                         onChange={handleDocxImport} 
                       />
