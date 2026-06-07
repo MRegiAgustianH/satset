@@ -2728,14 +2728,200 @@ export default function Index() {
     const cleanFontFamily = layout.fontFamily ? layout.fontFamily.split(',')[0].replace(/['"]/g, "").trim() : 'Times New Roman';
     const spacingNum = parseFloat(layout.lineSpacing || '2.0');
     const wordLineHeight = Math.round(spacingNum * 100) + '%';
-    
+    const baseFontSize = layout.fontSize || '12pt';
+
+    // ==========================================================================
+    // Build chapter content DIRECTLY from source data (not from paginated DOM).
+    // This lets Word handle pagination naturally so text flows correctly and
+    // matches the layout/format settings, instead of inheriting the web's
+    // pixel-estimated page splits (which fragment paragraphs and lists).
+    // ==========================================================================
+    const buildTableWordHtml = (sec) => {
+      const normHeaders = normalizeHeaders(sec.headers);
+      const normRows = normalizeTableRows(sec.rows);
+      const headersMask = computeMaskedHeaders(normHeaders);
+      const rowsMask = computeMaskedCells(normRows);
+      let h = `<div style="margin-top:12pt; margin-bottom:12pt; text-indent:0cm;">`;
+      h += `<p style="font-weight:bold; font-size:11pt; text-align:left; text-indent:0cm; margin:0 0 6pt 0; font-family:${cleanFontFamily};">${italicizeEnglishWordsText(sec.title || 'Tabel')}</p>`;
+      h += `<table border="1" cellspacing="0" cellpadding="5" style="border-collapse:collapse; width:100%; border:1px solid #000;">`;
+      h += '<tr>';
+      normHeaders.forEach((hd, i) => {
+        if (headersMask[i]) return;
+        const isNoCol = (hd.text || '').toLowerCase() === 'no';
+        const bg = hd.bgColor ? ` bgcolor="${hd.bgColor}"` : '';
+        const colspan = hd.colSpan && hd.colSpan > 1 ? ` colspan="${hd.colSpan}"` : '';
+        const rowspan = hd.rowSpan && hd.rowSpan > 1 ? ` rowspan="${hd.rowSpan}"` : '';
+        const bgStyle = hd.bgColor ? `background-color:${hd.bgColor};` : '';
+        h += `<td${colspan}${rowspan}${bg} style="border:1px solid #000; padding:6px; font-weight:bold; vertical-align:top; text-align:${isNoCol ? 'center' : 'left'}; font-family:${cleanFontFamily}; font-size:${baseFontSize}; ${bgStyle}">${italicizeEnglishWordsText(hd.text)}</td>`;
+      });
+      h += '</tr>';
+      normRows.forEach((row, rIdx) => {
+        h += '<tr>';
+        row.forEach((cell, cIdx) => {
+          if (rowsMask[rIdx] && rowsMask[rIdx][cIdx]) return;
+          const headerCell = normHeaders[cIdx];
+          const isNoCol = headerCell && (headerCell.text || '').toLowerCase() === 'no';
+          const bg = cell.bgColor ? ` bgcolor="${cell.bgColor}"` : '';
+          const colspan = cell.colSpan && cell.colSpan > 1 ? ` colspan="${cell.colSpan}"` : '';
+          const rowspan = cell.rowSpan && cell.rowSpan > 1 ? ` rowspan="${cell.rowSpan}"` : '';
+          const bgStyle = cell.bgColor ? `background-color:${cell.bgColor};` : '';
+          h += `<td${colspan}${rowspan}${bg} style="border:1px solid #000; padding:6px; vertical-align:top; text-align:${isNoCol ? 'center' : 'left'}; font-family:${cleanFontFamily}; font-size:${baseFontSize}; ${bgStyle}">${italicizeEnglishWordsText(cell.text)}</td>`;
+        });
+        h += '</tr>';
+      });
+      h += '</table></div>';
+      return h;
+    };
+
+    const buildFigureWordHtml = (sec) => {
+      let h = `<div style="margin-top:12pt; margin-bottom:12pt; text-align:center; text-indent:0cm;">`;
+      if (sec.imageData) {
+        h += `<img src="${sec.imageData}" width="400" style="max-width:100%;" /><br/>`;
+      } else {
+        h += `<div style="border:1px dashed #777; background-color:#f3f4f6; width:100%; height:120px; padding:20px; text-align:center;"><p style="font-family:monospace; font-size:9pt; color:#555; text-align:center; text-indent:0cm; margin-top:20px;">[Skema / Diagram Model]</p></div>`;
+      }
+      h += `<p style="font-weight:bold; font-size:11pt; text-align:center; text-indent:0cm; margin:6pt 0 0 0; font-family:${cleanFontFamily};">${italicizeEnglishWordsText(sec.title || 'Gambar')}</p>`;
+      h += `</div>`;
+      return h;
+    };
+
+    const buildEquationWordHtml = (babKey, sec) => {
+      const babMatch = babKey.match(/\d+/);
+      const babNum = babMatch ? babMatch[0] : '1';
+      const babSecs = babSections[babKey] || [];
+      const eqIdx = babSecs.filter(s => s.type === 'equation').findIndex(s => s.id === sec.id);
+      const prefix = `(${babNum}.${eqIdx !== -1 ? eqIdx + 1 : 1})`;
+      const descLines = sec.description ? sec.description.split('\n').filter(l => l.trim()) : [];
+      let h = `<div style="margin-top:12pt; margin-bottom:12pt; text-indent:0cm;">`;
+      if (sec.title && sec.title.trim()) {
+        h += `<p style="margin:0 0 6pt 0; font-weight:bold; font-size:12pt; text-align:left; text-indent:0cm; font-family:${cleanFontFamily};">${italicizeEnglishWordsText(sec.title)}</p>`;
+      }
+      h += `<table border="0" cellspacing="0" cellpadding="0" style="border-collapse:collapse; width:100%; border:none; margin-top:6pt; margin-bottom:6pt;"><tr style="border:none;"><td style="width:90%; text-align:center; font-family:${cleanFontFamily}; font-size:12pt; font-weight:bold; font-style:italic; border:none; padding:0;">${sec.content || 'y = f(x)'}</td><td style="width:10%; text-align:right; font-family:${cleanFontFamily}; font-size:12pt; font-weight:bold; border:none; padding:0;">${prefix}</td></tr></table>`;
+      if (descLines.length > 0) {
+        let descHtml = '<span style="font-weight:bold;">Keterangan:</span><br/>';
+        descLines.forEach((line, lIdx) => {
+          descHtml += `<span style="font-style:italic;">${italicizeEnglishWordsText(line)}</span>`;
+          if (lIdx < descLines.length - 1) descHtml += '<br/>';
+        });
+        h += `<p style="margin:6pt 0 0 1cm; text-indent:0cm; font-family:${cleanFontFamily}; font-size:11pt; line-height:1.2;">${descHtml}</p>`;
+      }
+      h += `</div>`;
+      return h;
+    };
+
+    const buildChapterWordContent = (babKey) => {
+      const rawSections = babSections[babKey] || [];
+      const resolved = resolveBlockNumberingForBab(babKey, rawSections);
+      let html = '';
+
+      // BAB chapter heading (h1)
+      const babTitle = babTitles[babKey];
+      if (babTitle) {
+        const h1s = headingStyles.h1 || {};
+        let titleHtml = `${babTitle.prefix}<br/>${babTitle.title}`;
+        if (h1s.uppercase) titleHtml = titleHtml.toUpperCase();
+        html += `<h1 class="MsoHeading1" style="mso-outline-level:1; text-align:${h1s.textAlign || 'center'}; font-size:${h1s.fontSize || '14pt'}; font-weight:${h1s.fontWeight || 'bold'}; font-style:${h1s.fontStyle || 'normal'}; font-family:${cleanFontFamily};">${titleHtml}</h1>`;
+      }
+
+      const renderContentText = (rawText) => {
+        let out = '';
+        const paragraphs = rawText.split(/\n+/).filter(p => p.trim());
+        paragraphs.forEach(p => {
+          const text = p.trim();
+          if (text === '---') {
+            out += '<br clear="all" style="page-break-before: always;" />';
+            return;
+          }
+          // Honor inline [pagebreak] markers by splitting into parts
+          const parts = text.split(/\[\s*(?:page[-_\s]*)?br[ea]{1,2}ke?\s*\]/gi);
+          parts.forEach((part, index) => {
+            const cleanedPart = part.trim();
+            if (cleanedPart) {
+              const listMatch = cleanedPart.match(/^([0-9a-zA-Z]+[\.\)])\s+(.*)$/);
+              if (listMatch) {
+                out += `<p style="margin:0; margin-left:1cm; text-indent:-1cm; text-align:justify; line-height:${wordLineHeight}; font-family:${cleanFontFamily}; font-size:${baseFontSize};"><span style="font-weight:bold;">${listMatch[1]}</span><span style="mso-tab-count:1">&#9;</span>${italicizeEnglishWordsText(listMatch[2])}</p>`;
+              } else {
+                const indent = layout.paragraphIndent === 'indented' ? '1.25cm' : '0cm';
+                out += `<p class="paragraph-content" style="text-indent:${indent}; text-align:justify; margin:0; line-height:${wordLineHeight}; font-family:${cleanFontFamily}; font-size:${baseFontSize};">${italicizeEnglishWordsText(cleanedPart)}</p>`;
+              }
+            }
+            if (index < parts.length - 1) {
+              out += '<br clear="all" style="page-break-before: always;" />';
+            }
+          });
+        });
+        return out;
+      };
+
+      resolved.forEach(sec => {
+        if (sec.type === 'table') {
+          html += buildTableWordHtml(sec);
+        } else if (sec.type === 'figure') {
+          html += buildFigureWordHtml(sec);
+        } else if (sec.type === 'equation') {
+          html += buildEquationWordHtml(babKey, sec);
+        } else {
+          // text section
+          if (sec.headingLevel > 0) {
+            const lvl = sec.headingLevel;
+            const hs = headingStyles[`h${lvl}`] || {};
+            let titleHtml = italicizeEnglishWordsText(`${sec.resolvedPrefix || ''}${sec.title || ''}`);
+            if (hs.uppercase) titleHtml = titleHtml.toUpperCase();
+            html += `<h${lvl} class="MsoHeading${lvl}" style="mso-outline-level:${lvl}; text-align:${hs.textAlign || 'left'}; font-size:${hs.fontSize || '12pt'}; font-weight:${hs.fontWeight || 'bold'}; font-style:${hs.fontStyle || 'normal'}; font-family:${cleanFontFamily};">${titleHtml}</h${lvl}>`;
+          }
+          if (sec.content && sec.content.trim()) {
+            html += renderContentText(sec.content);
+          }
+        }
+      });
+
+      return html;
+    };
+
+    const processedBabs = new Set();
+
     pageIds.forEach((pageId, idx) => {
+      // CHAPTER PAGES: build once per chapter from source, let Word paginate
+      const babMatch = pageId.match(/^(bab\d+)-\d+$/);
+      if (babMatch) {
+        const babKey = babMatch[1];
+        if (processedBabs.has(babKey)) return; // already built this chapter
+        processedBabs.add(babKey);
+
+        if (idx === 0) {
+          combinedHtml += '<div class="WordSection1">';
+        } else if (babKey === 'bab1') {
+          // Switch to WordSection2 for Arabic numbering restarting at 1
+          combinedHtml += '</div><br clear="all" style="page-break-before: always; mso-break-type: section-break;" /><div class="WordSection2">';
+        } else {
+          combinedHtml += '<br clear="all" style="page-break-before: always;" />';
+        }
+        combinedHtml += `<div class="word-page">${buildChapterWordContent(babKey)}</div>`;
+        return;
+      }
+
       const pageEl = document.getElementById(`page-${pageId}`);
       if (pageEl) {
         const contentClone = pageEl.querySelector('.page-content').cloneNode(true);
         
         // Remove print-only or editor helper controls
         contentClone.querySelectorAll('.no-print').forEach(el => el.remove());
+        
+        // Unwrap heading elements (h1-h6) from nested div wrappers so Word recognizes them as outline headings
+        contentClone.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(heading => {
+          let parent = heading.parentElement;
+          // Keep unwrapping if parent div only contains this heading (after no-print removal)
+          while (parent && parent.tagName === 'DIV' && parent !== contentClone) {
+            const siblings = Array.from(parent.childNodes).filter(n => n.nodeType === 1 || (n.nodeType === 3 && n.textContent.trim()));
+            if (siblings.length === 1 && siblings[0] === heading) {
+              const grandparent = parent.parentElement;
+              grandparent.replaceChild(heading, parent);
+              parent = heading.parentElement;
+            } else {
+              break;
+            }
+          }
+        });
         
         // Find empty spacing elements and insert non-breaking spaces so Word doesn't collapse them
         contentClone.querySelectorAll('div').forEach(div => {
@@ -2966,6 +3152,17 @@ export default function Index() {
             if (hStyle.uppercase) {
               style += `text-transform: uppercase; `;
             }
+            // Add mso-outline-level for Word navigation pane
+            const hLevel = parseInt(tagNameLower.replace('h', ''));
+            if (hLevel >= 1 && hLevel <= 6) {
+              style += `mso-outline-level: ${hLevel}; `;
+              el.classList.add(`MsoHeading${hLevel}`);
+            }
+          } else if (/^h[1-6]$/.test(tagNameLower)) {
+            // Heading tag without custom headingStyles config — still add outline level
+            const hLevel = parseInt(tagNameLower.replace('h', ''));
+            style += `mso-outline-level: ${hLevel}; `;
+            el.classList.add(`MsoHeading${hLevel}`);
           } else {
             // Apply text sizing classes from Tailwind (e.g. text-[14pt])
             let hasCustomSize = false;
@@ -3060,7 +3257,6 @@ export default function Index() {
           combinedHtml += '<br clear="all" style="page-break-before: always;" />';
         }
         
-        // Removed inline margin to prevent double-margin formatting in MS Word
         combinedHtml += `<div class="word-page">${contentClone.innerHTML}</div>`;
       }
     });
@@ -3122,6 +3318,8 @@ export default function Index() {
             text-align: ${headingStyles?.h1?.textAlign || 'center'};
             font-family: ${cleanFontFamily};
             margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
+            mso-style-name: "heading 1";
+            mso-outline-level: 1;
           }
           h2 {
             font-size: ${headingStyles?.h2?.fontSize || '12pt'};
@@ -3129,18 +3327,55 @@ export default function Index() {
             text-align: ${headingStyles?.h2?.textAlign || 'left'};
             font-family: ${cleanFontFamily};
             margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
+            mso-style-name: "heading 2";
+            mso-outline-level: 2;
           }
-          h3, h4, h5, h6 {
+          h3 {
             font-size: ${headingStyles?.h3?.fontSize || '12pt'};
             font-weight: ${headingStyles?.h3?.fontWeight || 'bold'};
             text-align: ${headingStyles?.h3?.textAlign || 'left'};
             font-family: ${cleanFontFamily};
             margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
+            mso-style-name: "heading 3";
+            mso-outline-level: 3;
+          }
+          h4 {
+            font-size: ${headingStyles?.h3?.fontSize || '12pt'};
+            font-weight: ${headingStyles?.h3?.fontWeight || 'bold'};
+            text-align: ${headingStyles?.h3?.textAlign || 'left'};
+            font-family: ${cleanFontFamily};
+            margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
+            mso-style-name: "heading 4";
+            mso-outline-level: 4;
+          }
+          h5 {
+            font-size: ${headingStyles?.h3?.fontSize || '12pt'};
+            font-weight: ${headingStyles?.h3?.fontWeight || 'bold'};
+            text-align: ${headingStyles?.h3?.textAlign || 'left'};
+            font-family: ${cleanFontFamily};
+            margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
+            mso-style-name: "heading 5";
+            mso-outline-level: 5;
+          }
+          h6 {
+            font-size: ${headingStyles?.h3?.fontSize || '12pt'};
+            font-weight: ${headingStyles?.h3?.fontWeight || 'bold'};
+            text-align: ${headingStyles?.h3?.textAlign || 'left'};
+            font-family: ${cleanFontFamily};
+            margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
+            mso-style-name: "heading 6";
+            mso-outline-level: 6;
           }
           .toc-item {
             tab-stops: right dotted ${21.0 - (parseFloat(layout.marginLeft) || 4) - (parseFloat(layout.marginRight) || 3)}cm;
             mso-tab-stops: right dotted ${21.0 - (parseFloat(layout.marginLeft) || 4) - (parseFloat(layout.marginRight) || 3)}cm;
           }
+          .MsoHeading1 { mso-style-name: "heading 1"; mso-outline-level: 1; }
+          .MsoHeading2 { mso-style-name: "heading 2"; mso-outline-level: 2; }
+          .MsoHeading3 { mso-style-name: "heading 3"; mso-outline-level: 3; }
+          .MsoHeading4 { mso-style-name: "heading 4"; mso-outline-level: 4; }
+          .MsoHeading5 { mso-style-name: "heading 5"; mso-outline-level: 5; }
+          .MsoHeading6 { mso-style-name: "heading 6"; mso-outline-level: 6; }
           p {
             margin-bottom: 6pt;
             line-height: ${wordLineHeight};
@@ -5643,8 +5878,6 @@ export default function Index() {
                                    </div>
                                  </div>
                                )}
-                             </div>
-                           ) : null}
 
                               <div className="flex flex-wrap gap-2 mt-2 pt-1 border-t border-slate-150 dark:border-slate-800/60 no-print">
                                 <div className="relative">
