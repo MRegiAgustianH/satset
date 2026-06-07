@@ -55,37 +55,30 @@
   overflow-wrap: break-word;
 }
 
-/* Academic Table Formatting (APA / DIKTI format) */
+/* Academic Table Formatting (Grid format - All Borders) */
 .a4-page .academic-table {
   border-collapse: collapse !important;
-  border-top: 1.5pt solid #000000 !important;
-  border-bottom: 1.5pt solid #000000 !important;
-  border-left: none !important;
-  border-right: none !important;
+  border: 1px solid #000000 !important;
   width: 100% !important;
 }
 
 .a4-page .academic-table thead tr {
-  border-bottom: 1pt solid #000000 !important;
+  border-bottom: 1px solid #000000 !important;
 }
 
 .a4-page .academic-table th {
-  border: none !important;
+  border: 1px solid #000000 !important;
   font-weight: bold !important;
   padding: 4px 6px !important;
 }
 
 .a4-page .academic-table td {
-  border: none !important;
+  border: 1px solid #000000 !important;
   padding: 4px 6px !important;
 }
 
 .a4-page .academic-table tbody tr {
-  border-bottom: 0.5px solid #e2e8f0 !important;
-}
-
-.a4-page .academic-table tbody tr:last-child {
-  border-bottom: none !important;
+  border-bottom: 1px solid #000000 !important;
 }
 
 /* Page number styling - uses document font (Times New Roman) */

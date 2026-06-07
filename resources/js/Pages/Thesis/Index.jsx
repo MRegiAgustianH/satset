@@ -4,7 +4,7 @@ import {
   GraduationCap, Moon, Sun, Sliders, FileText, BookOpen, Sparkles, 
   Save, FolderOpen, Printer, ZoomIn, ZoomOut, Info, AlertCircle, 
   Check, Loader2, Database, Plus, Trash2, Search, Table, Image as ImageIcon,
-  Compass, List, RotateCcw, Wand2
+  Compass, List, RotateCcw, Wand2, ExternalLink
 } from 'lucide-react';
 import mammoth from 'mammoth';
 
@@ -121,12 +121,168 @@ const italicizeEnglishWordsText = (text) => {
   return processedParts.join('<br />');
 };
 
+const cleanLineBreaks = (text) => {
+  if (!text) return '';
+  // Normalize line endings to \n
+  let normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  
+  // Split by double newlines first (actual paragraph breaks)
+  const paragraphs = normalized.split(/\n\n+/);
+  
+  // For each paragraph, replace single newlines with a space, and trim multiple spaces
+  const cleanedParagraphs = paragraphs.map(p => {
+    let cleaned = p.replace(/\n/g, ' ');
+    cleaned = cleaned.replace(/\s+/g, ' ').trim();
+    return cleaned;
+  });
+  
+  // Join back with double newlines
+  return cleanedParagraphs.join('\n\n');
+};
+
+const splitParagraphText = (text, linesFit, widthPx, layout, isList) => {
+  const words = text.split(/\s+/);
+  const charWidth = 7.2;
+  const textWidthPx = isList ? (widthPx - 32) : widthPx;
+  const charsPerLine = Math.floor(textWidthPx / charWidth);
+  const textIndentPx = (!isList && layout.paragraphIndent === 'indented') ? 47 : 0;
+  
+  let currentLineIdx = 0;
+  let currentLineChars = 0;
+  let part1Words = [];
+  let part2Words = [];
+  
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    const wordLen = word.length + 1; // plus space
+    
+    let maxCharsForLine = charsPerLine;
+    if (currentLineIdx === 0 && !isList) {
+      maxCharsForLine = Math.floor((textWidthPx - textIndentPx) / charWidth);
+    }
+    
+    if (currentLineChars + word.length > maxCharsForLine && currentLineChars > 0) {
+      currentLineIdx++;
+      currentLineChars = 0;
+    }
+    
+    if (currentLineIdx < linesFit) {
+      part1Words.push(word);
+      currentLineChars += wordLen;
+    } else {
+      part2Words.push(word);
+    }
+  }
+  
+  return {
+    part1: part1Words.join(' '),
+    part2: part2Words.join(' ')
+  };
+};
+
 const getCsrfToken = () => {
   const token = document.querySelector('meta[name="csrf-token"]');
   if (token) return token.getAttribute('content');
   const match = document.cookie.match(/XSRF-TOKEN=([^;]+)/);
   if (match) return decodeURIComponent(match[1]);
   return '';
+};
+
+const normalizeHeaders = (headers) => {
+  if (!headers) return [];
+  if (typeof headers === 'string') {
+    return headers.split(',').map(h => ({
+      text: h.trim(),
+      colSpan: 1,
+      rowSpan: 1,
+      bgColor: ''
+    }));
+  }
+  if (Array.isArray(headers)) {
+    return headers.map(h => {
+      if (h && typeof h === 'object') {
+        return {
+          text: h.text !== undefined ? String(h.text) : '',
+          colSpan: h.colSpan ? parseInt(h.colSpan) : 1,
+          rowSpan: h.rowSpan ? parseInt(h.rowSpan) : 1,
+          bgColor: h.bgColor || ''
+        };
+      }
+      return {
+        text: h !== undefined ? String(h) : '',
+        colSpan: 1,
+        rowSpan: 1,
+        bgColor: ''
+      };
+    });
+  }
+  return [];
+};
+
+const normalizeTableRows = (rows) => {
+  if (!Array.isArray(rows)) return [];
+  return rows.map(row => {
+    if (!Array.isArray(row)) return [];
+    return row.map(cell => {
+      if (cell && typeof cell === 'object') {
+        return {
+          text: cell.text !== undefined ? String(cell.text) : '',
+          colSpan: cell.colSpan ? parseInt(cell.colSpan) : 1,
+          rowSpan: cell.rowSpan ? parseInt(cell.rowSpan) : 1,
+          bgColor: cell.bgColor || ''
+        };
+      }
+      return {
+        text: cell !== undefined ? String(cell) : '',
+        colSpan: 1,
+        rowSpan: 1,
+        bgColor: ''
+      };
+    });
+  });
+};
+
+const computeMaskedHeaders = (headers) => {
+  if (!Array.isArray(headers)) return [];
+  const masked = Array(headers.length).fill(false);
+  for (let i = 0; i < headers.length; i++) {
+    if (masked[i]) continue;
+    const cell = headers[i];
+    const cSpan = cell ? (cell.colSpan || 1) : 1;
+    for (let dc = 1; dc < cSpan; dc++) {
+      if (i + dc < headers.length) {
+        masked[i + dc] = true;
+      }
+    }
+  }
+  return masked;
+};
+
+const computeMaskedCells = (rows) => {
+  const R = rows.length;
+  if (R === 0) return [];
+  const C = Math.max(...rows.map(row => row.length));
+  
+  const masked = Array(R).fill(null).map(() => Array(C).fill(false));
+  for (let r = 0; r < R; r++) {
+    const row = rows[r];
+    for (let c = 0; c < row.length; c++) {
+      if (masked[r][c]) continue;
+      const cell = row[c];
+      if (!cell) continue;
+      const rSpan = cell.rowSpan || 1;
+      const cSpan = cell.colSpan || 1;
+      for (let dr = 0; dr < rSpan; dr++) {
+        for (let dc = 0; dc < cSpan; dc++) {
+          if (dr === 0 && dc === 0) continue;
+          if (r + dr < R && c + dc < rows[r + dr].length) {
+            masked[r + dr][c + dc] = true;
+          }
+        }
+      }
+    }
+  }
+  return masked;
 };
 
 const SECTION_GROUPS = [
@@ -139,6 +295,7 @@ const SECTION_GROUPS = [
   { id: 'daftar-isi', name: 'Daftar Isi' },
   { id: 'daftar-tabel', name: 'Daftar Tabel' },
   { id: 'daftar-gambar', name: 'Daftar Gambar' },
+  { id: 'daftar-rumus', name: 'Daftar Rumus' },
   { id: 'bab1', name: 'BAB I PENDAHULUAN' },
   { id: 'bab2', name: 'BAB II TINJAUAN PUSTAKA' },
   { id: 'bab3', name: 'BAB III METODOLOGI PENELITIAN' },
@@ -153,6 +310,13 @@ export default function Index() {
   // ==========================================================================
   
   const [theme, setTheme] = useState('dark');
+  const [babTitles, setBabTitles] = useState({
+    bab1: { prefix: "BAB I", title: "PENDAHULUAN" },
+    bab2: { prefix: "BAB II", title: "TINJAUAN PUSTAKA" },
+    bab3: { prefix: "BAB III", title: "METODOLOGI PENELITIAN" },
+    bab4: { prefix: "BAB IV", title: "HASIL DAN PEMBAHASAN" },
+    bab5: { prefix: "BAB V", title: "KESIMPULAN DAN SARAN" }
+  });
   const [showWelcomeModal, setShowWelcomeModal] = useState(true);
   const [hasLocalDraft, setHasLocalDraft] = useState(false);
   
@@ -176,7 +340,8 @@ export default function Index() {
     showPengesahan: false,
     showPernyataan: false,
     showAbstractIndo: false,
-    showAbstractEng: false
+    showAbstractEng: false,
+    showDaftarRumus: true
   });
 
   // Cover Page Fields — kept for backward compatibility (used by persetujuan/pengesahan pages)
@@ -251,6 +416,233 @@ export default function Index() {
 
   const [editingElementId, setEditingElementId] = useState(null);
   const [editingElementData, setEditingElementData] = useState(null);
+  const [selectedCell, setSelectedCell] = useState(null); // { blockId, r, c }
+  const [activeTableTab, setActiveTableTab] = useState('visual'); // 'visual' or 'csv'
+  const [insertMenu, setInsertMenu] = useState({ blockId: null, position: null });
+
+  const updateTableCell = (babKey, secId, r, c, field, value) => {
+    setBabSections(prev => {
+      const list = prev[babKey] || [];
+      const updatedList = list.map(sec => {
+        if (sec.id === secId) {
+          if (r === -1) {
+            const normHeaders = normalizeHeaders(sec.headers);
+            normHeaders[c] = { ...normHeaders[c], [field]: value };
+            return {
+              ...sec,
+              headers: normHeaders
+            };
+          } else {
+            const normRows = normalizeTableRows(sec.rows);
+            normRows[r][c] = { ...normRows[r][c], [field]: value };
+            return {
+              ...sec,
+              rows: normRows,
+              rowsText: normRows.map(row => row.map(cell => cell.text).join(', ')).join('\n')
+            };
+          }
+        }
+        return sec;
+      });
+      const updated = { ...prev, [babKey]: updatedList };
+      saveLocalDraft({ babSections: updated });
+      return updated;
+    });
+  };
+
+  const mergeTableCellRight = (babKey, secId, r, c) => {
+    setBabSections(prev => {
+      const list = prev[babKey] || [];
+      const updatedList = list.map(sec => {
+        if (sec.id === secId) {
+          if (r === -1) {
+            const normHeaders = normalizeHeaders(sec.headers);
+            const cell = normHeaders[c];
+            const nextC = c + (cell.colSpan || 1);
+            if (nextC < normHeaders.length) {
+              const nextCell = normHeaders[nextC];
+              const mergedText = (cell.text + ' ' + (nextCell.text || '')).trim();
+              cell.colSpan = (cell.colSpan || 1) + (nextCell.colSpan || 1);
+              cell.text = mergedText;
+              return { ...sec, headers: normHeaders };
+            }
+          } else {
+            const normRows = normalizeTableRows(sec.rows);
+            const cell = normRows[r][c];
+            const nextC = c + (cell.colSpan || 1);
+            if (nextC < normRows[r].length) {
+              const nextCell = normRows[r][nextC];
+              const mergedText = (cell.text + ' ' + (nextCell.text || '')).trim();
+              cell.colSpan = (cell.colSpan || 1) + (nextCell.colSpan || 1);
+              cell.text = mergedText;
+              return {
+                ...sec,
+                rows: normRows,
+                rowsText: normRows.map(row => row.map(cell => cell.text).join(', ')).join('\n')
+              };
+            }
+          }
+        }
+        return sec;
+      });
+      const updated = { ...prev, [babKey]: updatedList };
+      saveLocalDraft({ babSections: updated });
+      return updated;
+    });
+  };
+
+  const mergeTableCellDown = (babKey, secId, r, c) => {
+    if (r === -1) return;
+    setBabSections(prev => {
+      const list = prev[babKey] || [];
+      const updatedList = list.map(sec => {
+        if (sec.id === secId) {
+          const normRows = normalizeTableRows(sec.rows);
+          const cell = normRows[r][c];
+          const nextR = r + (cell.rowSpan || 1);
+          if (nextR < normRows.length) {
+            const nextCell = normRows[nextR][c];
+            const mergedText = (cell.text + ' ' + (nextCell.text || '')).trim();
+            cell.rowSpan = (cell.rowSpan || 1) + (nextCell.rowSpan || 1);
+            cell.text = mergedText;
+            return {
+              ...sec,
+              rows: normRows,
+              rowsText: normRows.map(row => row.map(cell => cell.text).join(', ')).join('\n')
+            };
+          }
+        }
+        return sec;
+      });
+      const updated = { ...prev, [babKey]: updatedList };
+      saveLocalDraft({ babSections: updated });
+      return updated;
+    });
+  };
+
+  const splitTableCell = (babKey, secId, r, c) => {
+    setBabSections(prev => {
+      const list = prev[babKey] || [];
+      const updatedList = list.map(sec => {
+        if (sec.id === secId) {
+          if (r === -1) {
+            const normHeaders = normalizeHeaders(sec.headers);
+            normHeaders[c].colSpan = 1;
+            normHeaders[c].rowSpan = 1;
+            return { ...sec, headers: normHeaders };
+          } else {
+            const normRows = normalizeTableRows(sec.rows);
+            normRows[r][c].colSpan = 1;
+            normRows[r][c].rowSpan = 1;
+            return {
+              ...sec,
+              rows: normRows,
+              rowsText: normRows.map(row => row.map(cell => cell.text).join(', ')).join('\n')
+            };
+          }
+        }
+        return sec;
+      });
+      const updated = { ...prev, [babKey]: updatedList };
+      saveLocalDraft({ babSections: updated });
+      return updated;
+    });
+  };
+
+  const addTableRowVisual = (babKey, secId) => {
+    setBabSections(prev => {
+      const list = prev[babKey] || [];
+      const updatedList = list.map(sec => {
+        if (sec.id === secId) {
+          const normHeaders = normalizeHeaders(sec.headers);
+          const normRows = normalizeTableRows(sec.rows);
+          const colsCount = normRows.length > 0 ? normRows[0].length : normHeaders.length;
+          const newRow = Array(colsCount).fill(null).map(() => ({ text: '', colSpan: 1, rowSpan: 1, bgColor: '' }));
+          const newRows = [...normRows, newRow];
+          return {
+            ...sec,
+            rows: newRows,
+            rowsText: newRows.map(row => row.map(cell => cell.text).join(', ')).join('\n')
+          };
+        }
+        return sec;
+      });
+      const updated = { ...prev, [babKey]: updatedList };
+      saveLocalDraft({ babSections: updated });
+      return updated;
+    });
+  };
+
+  const deleteTableRowVisual = (babKey, secId, targetR) => {
+    setBabSections(prev => {
+      const list = prev[babKey] || [];
+      const updatedList = list.map(sec => {
+        if (sec.id === secId) {
+          const normRows = normalizeTableRows(sec.rows);
+          if (normRows.length <= 1) return sec;
+          const newRows = normRows.filter((_, r) => r !== targetR);
+          return {
+            ...sec,
+            rows: newRows,
+            rowsText: newRows.map(row => row.map(cell => cell.text).join(', ')).join('\n')
+          };
+        }
+        return sec;
+      });
+      const updated = { ...prev, [babKey]: updatedList };
+      saveLocalDraft({ babSections: updated });
+      return updated;
+    });
+  };
+
+  const addTableColVisual = (babKey, secId) => {
+    setBabSections(prev => {
+      const list = prev[babKey] || [];
+      const updatedList = list.map(sec => {
+        if (sec.id === secId) {
+          const normHeaders = normalizeHeaders(sec.headers);
+          const normRows = normalizeTableRows(sec.rows);
+          const newHeaders = [...normHeaders, { text: `Kolom ${normHeaders.length + 1}`, colSpan: 1, rowSpan: 1, bgColor: '' }];
+          const newRows = normRows.map(row => [...row, { text: '', colSpan: 1, rowSpan: 1, bgColor: '' }]);
+          return {
+            ...sec,
+            headers: newHeaders,
+            rows: newRows,
+            rowsText: newRows.map(row => row.map(cell => cell.text).join(', ')).join('\n')
+          };
+        }
+        return sec;
+      });
+      const updated = { ...prev, [babKey]: updatedList };
+      saveLocalDraft({ babSections: updated });
+      return updated;
+    });
+  };
+
+  const deleteTableColVisual = (babKey, secId, targetC) => {
+    setBabSections(prev => {
+      const list = prev[babKey] || [];
+      const updatedList = list.map(sec => {
+        if (sec.id === secId) {
+          const normHeaders = normalizeHeaders(sec.headers);
+          const normRows = normalizeTableRows(sec.rows);
+          if (normHeaders.length <= 1) return sec;
+          const newHeaders = normHeaders.filter((_, c) => c !== targetC);
+          const newRows = normRows.map(row => row.filter((_, c) => c !== targetC));
+          return {
+            ...sec,
+            headers: newHeaders,
+            rows: newRows,
+            rowsText: newRows.map(row => row.map(cell => cell.text).join(', ')).join('\n')
+          };
+        }
+        return sec;
+      });
+      const updated = { ...prev, [babKey]: updatedList };
+      saveLocalDraft({ babSections: updated });
+      return updated;
+    });
+  };
 
   const convertOldDraftToSections = (draft) => {
     const updated = {
@@ -416,6 +808,15 @@ export default function Index() {
           page: 1,
           imageData: null
         };
+      } else if (type === 'equation') {
+        newBlock = {
+          id: 'sec_' + Date.now(),
+          type: 'equation',
+          title: 'Persamaan Baru',
+          content: 'y = a + bx',
+          description: 'y = Variabel Dependen\na = Konstanta\nb = Koefisien\nx = Variabel Independen',
+          page: 1
+        };
       } else {
         newBlock = {
           id: 'sec_' + Date.now(),
@@ -564,11 +965,10 @@ export default function Index() {
   };
 
   const getBabHeaderTitle = (babKey) => {
-    if (babKey === 'bab1') return "BAB I<br />PENDAHULUAN";
-    if (babKey === 'bab2') return "BAB II<br />TINJAUAN PUSTAKA";
-    if (babKey === 'bab3') return "BAB III<br />METODOLOGI PENELITIAN";
-    if (babKey === 'bab4') return "BAB IV<br />HASIL DAN PEMBAHASAN";
-    if (babKey === 'bab5') return "BAB V<br />KESIMPULAN DAN SARAN";
+    const bab = babTitles[babKey];
+    if (bab) {
+      return `${bab.prefix}<br />${bab.title}`;
+    }
     return "";
   };
 
@@ -576,51 +976,244 @@ export default function Index() {
     const babPagesMap = getBabPagesMap();
     const pageElements = (babPagesMap[babKey] && babPagesMap[babKey][pageIdx]) || [];
     
+    // Check if the current page is the first page containing any element of the editing block
+    const isFirstPageOfEditingBlock = (blockId) => {
+      const pages = babPagesMap[babKey] || [];
+      for (let pIdx = 0; pIdx < pages.length; pIdx++) {
+        if (pages[pIdx].some(el => el.blockId === blockId)) {
+          return pIdx === pageIdx;
+        }
+      }
+      return false;
+    };
+    
     return (
-      <div className="space-y-4">
+      <div className="flex flex-col gap-0">
         {pageElements.map((el, idx) => {
-          if (el.type === 'heading') {
+          if (el.type === 'pagebreak') {
+            return null;
+          }
+          
+          if (inlineEditingBlockId && el.blockId === inlineEditingBlockId) {
+            // Render editing interface ONLY on the page where the block starts
+            if (!isFirstPageOfEditingBlock(el.blockId)) return null;
+            
+            // Render editing interface ONLY for the first sub-element on this starting page
+            const isFirstOfBlock = pageElements.findIndex(x => x.blockId === el.blockId) === idx;
+            if (!isFirstOfBlock) return null;
+            
+            const sec = babSections[babKey]?.find(x => x.id === el.blockId);
+            if (!sec) return null;
+            
             return (
-              <div key={idx} className="mb-4">
-                {renderHeading(el.headingLevel, el.title)}
+              <div 
+                key={idx} 
+                className="inline-editor-active-block my-1 no-print animate-in fade-in duration-150"
+                style={{ 
+                  textIndent: 0, 
+                  textAlign: 'left', 
+                  lineHeight: 'normal',
+                  outline: '1.5px dashed #6366f1',
+                  outlineOffset: '4px',
+                  backgroundColor: 'rgba(99, 102, 241, 0.03)',
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {sec.headingLevel > 0 && (
+                  <div className="mb-2" style={{ textIndent: 0 }}>
+                    <textarea
+                      value={sec.title || ''}
+                      rows={1}
+                      onChange={(e) => handleUpdateSectionField(babKey, sec.id, 'title', e.target.value)}
+                      placeholder="Judul Sub-Bab..."
+                      className="w-full bg-transparent text-black border-none focus:outline-none font-bold"
+                      style={{
+                        ...getHeadingStyle(sec.headingLevel),
+                        resize: 'none',
+                        height: 'auto',
+                        padding: 0,
+                        margin: 0,
+                        border: 'none',
+                        outline: 'none',
+                        color: '#000000',
+                        textTransform: headingStyles[`h${sec.headingLevel}`]?.uppercase ? 'uppercase' : 'none',
+                        overflow: 'hidden',
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          document.getElementById(`inline-textarea-${sec.id}`)?.focus();
+                        }
+                      }}
+                    />
+                  </div>
+                )}
+                
+                <div style={{ textIndent: 0 }}>
+                  <textarea
+                    id={`inline-textarea-${sec.id}`}
+                    value={sec.content || ''}
+                    onChange={(e) => {
+                      handleUpdateSectionField(babKey, sec.id, 'content', e.target.value);
+                      e.target.style.height = 'auto';
+                      e.target.style.height = e.target.scrollHeight + 'px';
+                    }}
+                    placeholder="Tulis paragraf di sini... Gunakan [pagebreak] untuk membuat halaman baru."
+                    className="w-full bg-transparent text-black border-none focus:outline-none selection:bg-indigo-250/30"
+                    style={{
+                      fontFamily: 'var(--doc-font-family, "Times New Roman", Times, serif)',
+                      fontSize: 'var(--doc-font-size, 12pt)',
+                      lineHeight: 'var(--doc-line-spacing, 2.0)',
+                      textAlign: 'justify',
+                      textIndent: (!sec.headingLevel && layout.paragraphIndent === 'indented') ? '1.25cm' : '0px',
+                      resize: 'none',
+                      padding: 0,
+                      margin: 0,
+                      color: '#000000',
+                      overflow: 'hidden',
+                    }}
+                    autoFocus={sec.headingLevel === 0}
+                    ref={(el) => {
+                      if (el) {
+                        el.style.height = 'auto';
+                        el.style.height = el.scrollHeight + 'px';
+                      }
+                    }}
+                  />
+                </div>
               </div>
             );
           }
+          
+          if (el.type === 'heading') {
+            return (
+              <div 
+                key={idx} 
+                className="cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group relative animate-in fade-in duration-100"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleEditBlockInline(babKey, el.blockId);
+                }}
+                title="Klik untuk edit langsung"
+              >
+                {renderHeading(el.headingLevel, el.title)}
+                <span className="absolute -top-3 right-1 bg-indigo-600 text-white text-[8px] font-bold px-1 rounded opacity-0 group-hover:opacity-100 transition-opacity no-print">Klik untuk edit</span>
+              </div>
+            );
+          }
+          
           if (el.type === 'paragraph') {
-            // Check if this paragraph is a list item
             const listMatch = el.text.match(/^([0-9a-zA-Z]+[\.\)])\s+(.*)$/);
             if (listMatch) {
               return (
-                <div key={idx} className="flex mb-3 pr-1 text-justify items-start" style={{ textIndent: 0 }}>
-                  {/* Parallel bullet alignment */}
+                <div 
+                  key={idx} 
+                  className="flex pr-1 text-justify items-start cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group relative animate-in fade-in duration-100" 
+                  style={{ textIndent: 0, marginBottom: 0 }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleEditBlockInline(babKey, el.blockId);
+                  }}
+                  title="Klik untuk edit langsung"
+                >
                   <span className="w-8 shrink-0 font-bold text-slate-800">{listMatch[1]}</span>
                   <span className="flex-1 min-w-0 text-justify text-slate-900" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(listMatch[2]) }} />
+                  <span className="absolute -top-3 right-1 bg-indigo-600 text-white text-[8px] font-bold px-1 rounded opacity-0 group-hover:opacity-100 transition-opacity no-print">Klik untuk edit</span>
                 </div>
               );
             }
-            return <p key={idx} className="paragraph-content" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(el.text) }} />;
+            
+            if (el.isListContinuation) {
+              return (
+                <div 
+                  key={idx} 
+                  className="flex pr-1 text-justify items-start cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group relative animate-in fade-in duration-100" 
+                  style={{ textIndent: 0, paddingLeft: '32px', marginBottom: 0 }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleEditBlockInline(babKey, el.blockId);
+                  }}
+                  title="Klik untuk edit langsung"
+                >
+                  <span className="flex-1 min-w-0 text-justify text-slate-900" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(el.text) }} />
+                  <span className="absolute -top-3 right-1 bg-indigo-600 text-white text-[8px] font-bold px-1 rounded opacity-0 group-hover:opacity-100 transition-opacity no-print">Klik untuk edit</span>
+                </div>
+              );
+            }
+            
+            return (
+              <p 
+                key={idx} 
+                className="paragraph-content cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group relative animate-in fade-in duration-100" 
+                style={{
+                  textIndent: el.noIndent ? 0 : undefined,
+                  marginBottom: 0,
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleEditBlockInline(babKey, el.blockId);
+                }}
+                title="Klik untuk edit langsung"
+                dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(el.text) }} 
+              />
+            );
           }
+          
           if (el.type === 'table') {
-            const headers = el.headers ? el.headers.split(',').map(h => h.trim()) : [];
-            const rows = el.rows || [];
+            const normHeaders = normalizeHeaders(el.headers);
+            const normRows = normalizeTableRows(el.rows);
+            const headersMask = computeMaskedHeaders(normHeaders);
+            const rowsMask = computeMaskedCells(normRows);
+
             return (
               <div key={idx} className="mt-4 mb-6 leading-relaxed" style={{ textIndent: 0 }}>
                 {/* Caption at the top of academic tables */}
                 <div className="font-bold text-xs text-left mb-1" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(el.title || 'Tabel') }} />
-                <table className="academic-table w-full border-collapse text-[10pt] border-t-2 border-b-2 border-black">
+                <table className="academic-table w-full border-collapse text-[10pt] border border-black">
                   <thead>
-                    <tr className="border-b-[1.5px] border-black">
-                      {headers.map((h, i) => (
-                        <th key={i} className="p-1 font-bold text-center" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(h) }} />
-                      ))}
+                    <tr>
+                      {normHeaders.map((h, i) => {
+                        if (headersMask[i]) return null;
+                        const isNoCol = h.text.toLowerCase() === 'no';
+                        const style = {};
+                        if (h.bgColor) {
+                          style.backgroundColor = h.bgColor;
+                        }
+                        return (
+                          <th 
+                            key={i} 
+                            colSpan={h.colSpan || 1}
+                            rowSpan={h.rowSpan || 1}
+                            style={style}
+                            className={`p-1.5 font-bold border border-black align-middle ${isNoCol ? 'text-center' : 'text-left'}`} 
+                            dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(h.text) }} 
+                          />
+                        );
+                      })}
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((row, rIdx) => (
-                      <tr key={rIdx} className="border-b border-slate-300 last:border-b-0">
-                        {row.map((cell, cIdx) => (
-                          <td key={cIdx} className="p-1 text-center" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(cell) }} />
-                        ))}
+                    {normRows.map((row, rIdx) => (
+                      <tr key={rIdx}>
+                        {row.map((cell, cIdx) => {
+                          if (rowsMask[rIdx] && rowsMask[rIdx][cIdx]) return null;
+                          const headerCell = normHeaders[cIdx];
+                          const isNoCol = headerCell && headerCell.text.toLowerCase() === 'no';
+                          const style = {};
+                          if (cell.bgColor) {
+                            style.backgroundColor = cell.bgColor;
+                          }
+                          return (
+                            <td 
+                              key={cIdx} 
+                              colSpan={cell.colSpan || 1}
+                              rowSpan={cell.rowSpan || 1}
+                              style={style}
+                              className={`p-1.5 border border-black align-top text-black ${isNoCol ? 'text-center' : 'text-left'}`} 
+                              dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(cell.text) }} 
+                            />
+                          );
+                        })}
                       </tr>
                     ))}
                   </tbody>
@@ -654,6 +1247,42 @@ export default function Index() {
                 </div>
                 {/* Caption at the bottom of academic figures */}
                 <div className="font-bold text-xs text-center" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(el.title || 'Gambar') }} />
+              </div>
+            );
+          }
+          if (el.type === 'equation') {
+            const descLines = el.description ? el.description.split('\n').filter(l => l.trim()) : [];
+            const resolvedEqPrefix = (() => {
+              const babMatch = babKey.match(/\d+/);
+              const babNum = babMatch ? babMatch[0] : '1';
+              const babSecs = babSections[babKey] || [];
+              const eqIdx = babSecs.filter(s => s.type === 'equation').findIndex(s => s.id === el.blockId);
+              return `(${babNum}.${eqIdx !== -1 ? eqIdx + 1 : 1})`;
+            })();
+            return (
+              <div key={idx} className="equation-block mt-4 mb-6 flex flex-col gap-1.5 relative cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group" style={{ textIndent: 0 }} onClick={(e) => { e.stopPropagation(); handleEditBlockInline(babKey, el.blockId); }}>
+                <div className="font-bold text-xs text-left mb-1 text-slate-800" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(el.title || 'Rumus') }} />
+                
+                <div className="flex items-center justify-between w-full font-serif text-[12pt] py-1 border-t border-b border-transparent">
+                  <div className="flex-1 text-center font-bold italic">
+                    {el.content || 'y = f(x)'}
+                  </div>
+                  <div className="shrink-0 pl-4 font-bold text-slate-900">
+                    {resolvedEqPrefix}
+                  </div>
+                </div>
+
+                {descLines.length > 0 && (
+                  <div className="text-[10pt] text-left leading-relaxed pl-8 mt-1.5">
+                    <div className="font-bold mb-0.5 text-slate-800 text-xs">Keterangan:</div>
+                    <div className="flex flex-col gap-0.5">
+                      {descLines.map((line, lIdx) => (
+                        <div key={lIdx} className="italic text-slate-700 dark:text-slate-300 text-xs" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(line) }} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <span className="absolute -top-3 right-1 bg-indigo-600 text-white text-[8px] font-bold px-1 rounded opacity-0 group-hover:opacity-100 transition-opacity no-print">Klik untuk edit</span>
               </div>
             );
           }
@@ -692,13 +1321,7 @@ export default function Index() {
       <button 
         type="button"
         disabled={!!generatingSection}
-        onClick={() => {
-          if (legacyKey) {
-            handleAIGenerateSection(legacyKey, displayTitle);
-          } else {
-            handleAIGenerateDynamic(babKey, id, displayTitle);
-          }
-        }} 
+        onClick={() => triggerAIGenerateFlow({ babKey, id, displayTitle, legacyKey })} 
         className="bg-indigo-600/10 hover:bg-indigo-650/20 text-indigo-500 dark:text-indigo-400 px-2 py-1.5 rounded-lg flex items-center gap-1 font-bold text-[9px] w-full justify-center disabled:opacity-40"
       >
         {isGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
@@ -748,7 +1371,8 @@ export default function Index() {
       showPengesahan: false,
       showPernyataan: false,
       showAbstractIndo: false,
-      showAbstractEng: false
+      showAbstractEng: false,
+      showDaftarRumus: true
     };
     setLayout(blankLayout);
 
@@ -814,7 +1438,15 @@ export default function Index() {
         { id: 'b5s2', type: 'text', headingLevel: 2, title: 'Saran', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
       ]
     };
+    const defaultBabTitles = {
+      bab1: { prefix: "BAB I", title: "PENDAHULUAN" },
+      bab2: { prefix: "BAB II", title: "TINJAUAN PUSTAKA" },
+      bab3: { prefix: "BAB III", title: "METODOLOGI PENELITIAN" },
+      bab4: { prefix: "BAB IV", title: "HASIL DAN PEMBAHASAN" },
+      bab5: { prefix: "BAB V", title: "KESIMPULAN DAN SARAN" }
+    };
     setBabSections(blankBabSections);
+    setBabTitles(defaultBabTitles);
     setReferences([]);
     setAbstrakIndo('');
     setAbstrakIndoKeywords('');
@@ -827,6 +1459,7 @@ export default function Index() {
       cover: blankCover,
       coverElements: blankCoverElements,
       babSections: blankBabSections,
+      babTitles: defaultBabTitles,
       references: [],
       refStyle: 'apa',
       tables: [],
@@ -880,12 +1513,39 @@ export default function Index() {
   
   // AI content draft generator state
   const [generatingSection, setGeneratingSection] = useState(null);
+  const [backgroundStyle, setBackgroundStyle] = useState('structured');
+  const [scholarYearStart, setScholarYearStart] = useState(() => new Date().getFullYear() - 10);
+  const [scholarYearEnd, setScholarYearEnd] = useState(() => new Date().getFullYear());
   
   // Zoom & UI States
   const [zoomLevel, setZoomLevel] = useState(80);
   const [activeTab, setActiveTab] = useState('layout');
   const [activeSection, setActiveSection] = useState('cover');
   const [saveFilename, setSaveFilename] = useState('Draft_Skripsi');
+  const [autosaveEnabled, setAutosaveEnabled] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('autosave_setting');
+      return stored !== 'false'; // default to true
+    }
+    return true;
+  });
+
+  const [inlineEditingBlockId, setInlineEditingBlockId] = useState(null);
+  const [inlineEditingBabKey, setInlineEditingBabKey] = useState(null);
+
+  const handleEditBlockInline = (babKey, blockId) => {
+    setInlineEditingBlockId(blockId);
+    setInlineEditingBabKey(babKey);
+    setActiveSection(babKey);
+    setActiveTab('konten');
+  };
+
+  const handlePreviewBackgroundClick = (e) => {
+    if (inlineEditingBlockId && !e.target.closest('.inline-editor-active-block') && !e.target.closest('.inline-editor-toolbar')) {
+      setInlineEditingBlockId(null);
+      setInlineEditingBabKey(null);
+    }
+  };
 
   // Heading Styling State (H1 to H6)
   const [headingStyles, setHeadingStyles] = useState({
@@ -903,6 +1563,9 @@ export default function Index() {
   const [draftsList, setDraftsList] = useState([]);
   const [loadingDrafts, setLoadingDrafts] = useState(false);
   const [showDraftsModal, setShowDraftsModal] = useState(false);
+  const [showAiPromptModal, setShowAiPromptModal] = useState(false);
+  const [aiPromptInput, setAiPromptInput] = useState('');
+  const [aiPromptTarget, setAiPromptTarget] = useState(null);
 
   // Download Modal settings
   const [showDownloadModal, setShowDownloadModal] = useState(false);
@@ -910,7 +1573,7 @@ export default function Index() {
   const [downloadRange, setDownloadRange] = useState('all'); // 'all' or 'custom'
   const [selectedDownloadSections, setSelectedDownloadSections] = useState([
     'cover', 'persetujuan', 'pengesahan', 'pernyataan', 'abstrak-indo', 'abstrak-eng',
-    'daftar-isi', 'daftar-tabel', 'daftar-gambar', 'bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'daftar-pustaka'
+    'daftar-isi', 'daftar-tabel', 'daftar-gambar', 'daftar-rumus', 'bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'daftar-pustaka'
   ]);
   const [downloadSplit, setDownloadSplit] = useState(false); // split by chapter/heading 1
   const [pagesToPrint, setPagesToPrint] = useState(null); // dynamic print page filter
@@ -936,6 +1599,18 @@ export default function Index() {
     ['bab1', 'bab2', 'bab3', 'bab4', 'bab5'].forEach(babKey => {
       (sections[babKey] || []).forEach(sec => {
         if (sec.type === 'figure') {
+          list.push({ ...sec, bab: babKey });
+        }
+      });
+    });
+    return list;
+  };
+
+  const getAllEquations = (sections = babSections) => {
+    const list = [];
+    ['bab1', 'bab2', 'bab3', 'bab4', 'bab5'].forEach(babKey => {
+      (sections[babKey] || []).forEach(sec => {
+        if (sec.type === 'equation') {
           list.push({ ...sec, bab: babKey });
         }
       });
@@ -1091,7 +1766,6 @@ export default function Index() {
         const charCount = el.text.length;
         const isList = /^[0-9a-zA-Z]+[\.\)]\s+/.test(el.text);
         const charWidth = 7.2;
-        const charsPerLine = Math.floor(widthPx / charWidth);
         
         let lines = 0;
         if (isList) {
@@ -1100,6 +1774,7 @@ export default function Index() {
           lines = Math.ceil(charCount / listCharsPerLine) || 1;
         } else {
           const textIndentPx = layout.paragraphIndent === 'indented' ? 47 : 0; // 1.25cm indent
+          const charsPerLine = Math.floor(widthPx / charWidth);
           const firstLineChars = Math.floor((widthPx - textIndentPx) / charWidth);
           if (charCount <= firstLineChars) {
             lines = 1;
@@ -1107,16 +1782,25 @@ export default function Index() {
             lines = 1 + Math.ceil((charCount - firstLineChars) / charsPerLine);
           }
         }
-        return lines * lineGapPx + 12; // lines * spacing + bottom spacing
+        return (lines * lineGapPx) + 8; // match p-1 padding height (4px top + 4px bottom)
       }
       
       if (el.type === 'table') {
         const rowsCount = el.rows ? el.rows.length : 0;
-        return 25 + 35 + (rowsCount * 30) + 24; // caption + headers + rows + margins
+        return 25 + 35 + (rowsCount * 30) + 40; // caption + headers + rows + margins
       }
       
       if (el.type === 'figure') {
-        return 151 + 25 + 24; // box + caption + margins
+        return 151 + 25 + 40; // box + caption + margins
+      }
+      
+      if (el.type === 'equation') {
+        const descLines = el.description ? el.description.split('\n').length : 0;
+        return 40 + (descLines * 20) + 40; // formula row + legend rows + margins
+      }
+      
+      if (el.type === 'pagebreak') {
+        return 0;
       }
       
       return 50;
@@ -1133,6 +1817,8 @@ export default function Index() {
           subElements.push({ type: 'table', blockId: sec.id, title: sec.title, headers: sec.headers, rows: sec.rows });
         } else if (sec.type === 'figure') {
           subElements.push({ type: 'figure', blockId: sec.id, title: sec.title, imageData: sec.imageData });
+        } else if (sec.type === 'equation') {
+          subElements.push({ type: 'equation', blockId: sec.id, title: sec.title, content: sec.content, description: sec.description });
         } else {
           if (sec.headingLevel > 0) {
             subElements.push({ type: 'heading', blockId: sec.id, headingLevel: sec.headingLevel, title: `${sec.resolvedPrefix || ''}${sec.title}` });
@@ -1140,7 +1826,23 @@ export default function Index() {
           if (sec.content && sec.content.trim()) {
             const paragraphs = sec.content.split(/\n+/).filter(p => p.trim());
             paragraphs.forEach(p => {
-              subElements.push({ type: 'paragraph', blockId: sec.id, text: p.trim() });
+              const cleanedText = p.trim();
+              if (cleanedText === '---') {
+                subElements.push({ type: 'pagebreak', blockId: sec.id });
+              } else {
+                // Split by [pagebreak] / [pagebrake] / [break] / [brake] (case-insensitive, optional hyphens/underscores/spaces)
+                const parts = p.split(/\[\s*(?:page[-_\s]*)?br[ea]{1,2}ke?\s*\]/gi);
+                parts.forEach((part, index) => {
+                  const cleanedPart = part.trim();
+                  if (cleanedPart) {
+                    subElements.push({ type: 'paragraph', blockId: sec.id, text: cleanedPart });
+                  }
+                  if (index < parts.length - 1) {
+                    subElements.push({ type: 'pagebreak', blockId: sec.id });
+                    // To prevent indentation issues for the next part if it continues
+                  }
+                });
+              }
             });
           }
         }
@@ -1149,21 +1851,93 @@ export default function Index() {
       // Pack into pages
       const pages = [];
       let currentPage = [];
-      const maxPageHeight = (29.7 - ((parseFloat(layout.marginTop) || 4.0) + (parseFloat(layout.marginBottom) || 3.0))) * 37.795;
+      const maxPageHeight = (29.7 - ((parseFloat(layout.marginTop) || 4.0) + (parseFloat(layout.marginBottom) || 3.0))) * 37.795 - 12; // safety buffer for rendering differences
       
       const chapterHeaderHeight = 120; // Consumed height by chapter header on page 1 of BAB
       let currentHeight = chapterHeaderHeight;
       
-      subElements.forEach((el, idx) => {
+      let elIdx = 0;
+      while (elIdx < subElements.length) {
+        const el = subElements[elIdx];
+        
+        if (el.type === 'pagebreak') {
+          if (currentPage.length > 0) {
+            pages.push(currentPage);
+            currentPage = [];
+            currentHeight = 0;
+          }
+          elIdx++;
+          continue;
+        }
+        
         const h = estimateHeight(el);
         let totalH = h;
         
         // Prevent orphan headings (keep with next)
-        if (el.type === 'heading' && subElements[idx + 1]) {
-          totalH += estimateHeight(subElements[idx + 1]);
+        if (el.type === 'heading' && subElements[elIdx + 1]) {
+          totalH += estimateHeight(subElements[elIdx + 1]);
         }
         
         if (currentHeight + totalH > maxPageHeight && currentPage.length > 0) {
+          // Check if we can split this paragraph to fill the remaining space on the current page
+          if (el.type === 'paragraph' && el.blockId !== inlineEditingBlockId) {
+            const availableHeight = maxPageHeight - currentHeight;
+            const lineSpacing = parseFloat(layout.lineSpacing) || 2.0;
+            const fontSizePx = 16;
+            const lineGapPx = fontSizePx * lineSpacing;
+            
+            // Available lines on current page
+            const linesFit = Math.floor((availableHeight - 8) / lineGapPx);
+            
+            // Calculate total lines of this paragraph
+            const charCount = el.text.length;
+            const isList = /^[0-9a-zA-Z]+[\.\)]\s+/.test(el.text);
+            const contentWidthCm = 21 - ((parseFloat(layout.marginLeft) || 4.0) + (parseFloat(layout.marginRight) || 3.0));
+            const widthPx = contentWidthCm * 37.795;
+            const charWidth = 7.2;
+            const textIndentPx = (!isList && layout.paragraphIndent === 'indented') ? 47 : 0;
+            const textWidthPx = isList ? (widthPx - 32) : widthPx;
+            const charsPerLine = Math.floor(textWidthPx / charWidth);
+            const firstLineChars = Math.floor((textWidthPx - textIndentPx) / charWidth);
+            
+            let totalLines = 0;
+            if (isList) {
+              const listWidthPx = widthPx - 32;
+              const listCharsPerLine = Math.floor(listWidthPx / charWidth);
+              totalLines = Math.ceil(charCount / listCharsPerLine) || 1;
+            } else {
+              if (charCount <= firstLineChars) {
+                totalLines = 1;
+              } else {
+                totalLines = 1 + Math.ceil((charCount - firstLineChars) / charsPerLine);
+              }
+            }
+            
+            if (linesFit >= 1 && totalLines > linesFit) {
+              // Split paragraph text
+              const { part1, part2 } = splitParagraphText(el.text, linesFit, widthPx, layout, isList);
+              if (part1.trim() && part2.trim()) {
+                const elPart1 = { ...el, text: part1 };
+                const elPart2 = { ...el, text: part2, noIndent: true, isListContinuation: isList };
+                
+                // Add Part 1 to current page
+                currentPage.push(elPart1);
+                pages.push(currentPage);
+                
+                // Start a new page for Part 2
+                currentPage = [];
+                currentHeight = 0;
+                
+                // Insert Part 2 into subElements right after the current element so it is processed in the next iteration
+                subElements.splice(elIdx + 1, 0, elPart2);
+                
+                elIdx++;
+                continue;
+              }
+            }
+          }
+          
+          // If not split, push current page and start a new page with the whole element
           pages.push(currentPage);
           currentPage = [el];
           currentHeight = h;
@@ -1171,7 +1945,8 @@ export default function Index() {
           currentPage.push(el);
           currentHeight += h;
         }
-      });
+        elIdx++;
+      }
       
       if (currentPage.length > 0) {
         pages.push(currentPage);
@@ -1199,6 +1974,7 @@ export default function Index() {
 
   const tables = getAllTables();
   const figures = getAllFigures();
+  const equations = getAllEquations();
   const setTables = () => {};
   const setFigures = () => {};
 
@@ -1227,7 +2003,29 @@ export default function Index() {
           setHasLocalDraft(true);
           if (parsed.layout) setLayout(prev => ({ ...prev, ...parsed.layout }));
           if (parsed.cover) setCover(prev => ({ ...prev, ...parsed.cover }));
-          if (parsed.coverElements) setCoverElements(parsed.coverElements);
+          if (parsed.coverElements) {
+            setCoverElements(parsed.coverElements);
+          } else if (parsed.cover) {
+            const resolvedElements = defaultCoverElements.map(el => {
+              if (el.field === 'title' && parsed.cover.title) return { ...el, value: parsed.cover.title };
+              if (el.field === 'subtitle' && parsed.cover.subtitle) return { ...el, value: parsed.cover.subtitle };
+              if (el.field === 'author' && parsed.cover.author) return { ...el, value: parsed.cover.author };
+              if (el.field === 'nim' && parsed.cover.nim) return { ...el, value: parsed.cover.nim };
+              if (el.field === 'prodi' && parsed.cover.prodi) return { ...el, value: `PROGRAM STUDI ${parsed.cover.prodi.toUpperCase()}` };
+              if (el.field === 'fakultas' && parsed.cover.fakultas) return { ...el, value: `FAKULTAS ${parsed.cover.fakultas.toUpperCase()}` };
+              if (el.field === 'univ' && parsed.cover.univ) return { ...el, value: parsed.cover.univ };
+              if (el.field === 'city_year') {
+                const city = parsed.cover.city || 'JAKARTA';
+                const year = parsed.cover.year || '2026';
+                return { ...el, value: `${city.toUpperCase()}, ${year}` };
+              }
+              if (el.type === 'logo') {
+                return { ...el, logoType: parsed.cover.logoType || 'default', logoData: parsed.cover.logoData || null };
+              }
+              return el;
+            });
+            setCoverElements(resolvedElements);
+          }
           if (parsed.babSections) {
             // Upgrade and merge if legacy tables/figures exist in parsed but not in babSections
             let incomingBabSections = parsed.babSections;
@@ -1281,6 +2079,7 @@ export default function Index() {
           if (parsed.abstrakEng) setAbstrakEng(parsed.abstrakEng);
           if (parsed.abstrakEngKeywords) setAbstrakEngKeywords(parsed.abstrakEngKeywords);
           if (parsed.headingStyles) setHeadingStyles(prev => ({ ...prev, ...parsed.headingStyles }));
+          if (parsed.babTitles) setBabTitles(parsed.babTitles);
         }
       }
     } catch (e) {
@@ -1288,11 +2087,78 @@ export default function Index() {
     }
   }, []);
 
+  // Auto Save Implementation
+  const lastSavedPayloadRef = React.useRef('');
+
+  useEffect(() => {
+    // Initialize the last saved payload ref on mount
+    const initialPayload = {
+      layout, cover, coverElements, babSections, babTitles, references, refStyle,
+      tables: getAllTables(),
+      figures: getAllFigures(),
+      abstrakIndo, abstrakIndoKeywords, abstrakEng, abstrakEngKeywords, headingStyles
+    };
+    lastSavedPayloadRef.current = JSON.stringify(initialPayload);
+  }, []);
+
+  useEffect(() => {
+    if (!autosaveEnabled || !saveFilename || saveFilename === 'Draft_Skripsi') {
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      const draftPayload = {
+        layout, cover, coverElements, babSections, babTitles, references, refStyle,
+        tables: getAllTables(),
+        figures: getAllFigures(),
+        abstrakIndo, abstrakIndoKeywords, abstrakEng, abstrakEngKeywords, headingStyles
+      };
+
+      const payloadString = JSON.stringify(draftPayload);
+      if (payloadString !== lastSavedPayloadRef.current) {
+        try {
+          const response = await fetch('/thesis/save', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-CSRF-TOKEN': getCsrfToken()
+            },
+            body: JSON.stringify({
+              filename: saveFilename,
+              draft_data: draftPayload
+            })
+          });
+          const result = await response.json();
+          if (response.ok && result.success) {
+            lastSavedPayloadRef.current = payloadString;
+            fetchDraftsList();
+            console.log("Draft auto-saved successfully.");
+          }
+        } catch (e) {
+          console.error("Auto save failed:", e);
+        }
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [
+    autosaveEnabled, saveFilename, layout, cover, coverElements, babSections, 
+    references, refStyle, abstrakIndo, abstrakIndoKeywords, 
+    abstrakEng, abstrakEngKeywords, headingStyles
+  ]);
+
+  const saveLocalDraftSetting = (enabled) => {
+    localStorage.setItem('autosave_setting', enabled ? 'true' : 'false');
+    showToast(`Auto Save ${enabled ? 'diaktifkan' : 'dinonaktifkan'}.`);
+  };
+
   const saveLocalDraft = (updatedState) => {
     try {
       const currentBabSections = updatedState?.babSections || babSections;
+      const currentCoverElements = updatedState?.coverElements || coverElements;
+      const currentBabTitles = updatedState?.babTitles || babTitles;
       const currentState = {
-        layout, cover, babSections: currentBabSections, references, refStyle, 
+        layout, cover, coverElements: currentCoverElements, babSections: currentBabSections, babTitles: currentBabTitles, references, refStyle, 
         tables: getAllTables(currentBabSections), 
         figures: getAllFigures(currentBabSections),
         abstrakIndo, abstrakIndoKeywords, abstrakEng, abstrakEngKeywords, headingStyles, ...updatedState
@@ -1486,6 +2352,7 @@ export default function Index() {
     entries.push({ title: "DAFTAR ISI", pageId: 'daftar-isi-1', isBold: true });
     entries.push({ title: "DAFTAR TABEL", pageId: 'daftar-tabel', isBold: true });
     entries.push({ title: "DAFTAR GAMBAR", pageId: 'daftar-gambar', isBold: true });
+    if (layout.showDaftarRumus) entries.push({ title: "DAFTAR RUMUS", pageId: 'daftar-rumus', isBold: true });
     
     // Build a lookup: blockId -> pageIndex (1-based) from the dynamic pagination engine
     const babPagesMapForToc = getBabPagesMap();
@@ -1523,23 +2390,23 @@ export default function Index() {
     };
 
     // BAB I
-    entries.push({ title: "BAB I PENDAHULUAN", pageId: 'bab1-1', isBold: true, isChapter: true });
+    entries.push({ title: `${babTitles.bab1.prefix} ${babTitles.bab1.title}`, pageId: 'bab1-1', isBold: true, isChapter: true });
     addChapterTocEntries('bab1');
     
     // BAB II
-    entries.push({ title: "BAB II TINJAUAN PUSTAKA", pageId: 'bab2-1', isBold: true, isChapter: true });
+    entries.push({ title: `${babTitles.bab2.prefix} ${babTitles.bab2.title}`, pageId: 'bab2-1', isBold: true, isChapter: true });
     addChapterTocEntries('bab2');
     
     // BAB III
-    entries.push({ title: "BAB III METODOLOGI PENELITIAN", pageId: 'bab3-1', isBold: true, isChapter: true });
+    entries.push({ title: `${babTitles.bab3.prefix} ${babTitles.bab3.title}`, pageId: 'bab3-1', isBold: true, isChapter: true });
     addChapterTocEntries('bab3');
     
     // BAB IV
-    entries.push({ title: "BAB IV HASIL DAN PEMBAHASAN", pageId: 'bab4-1', isBold: true, isChapter: true });
+    entries.push({ title: `${babTitles.bab4.prefix} ${babTitles.bab4.title}`, pageId: 'bab4-1', isBold: true, isChapter: true });
     addChapterTocEntries('bab4');
     
     // BAB V
-    entries.push({ title: "BAB V KESIMPULAN DAN SARAN", pageId: 'bab5-1', isBold: true, isChapter: true });
+    entries.push({ title: `${babTitles.bab5.prefix} ${babTitles.bab5.title}`, pageId: 'bab5-1', isBold: true, isChapter: true });
     addChapterTocEntries('bab5');
     
     entries.push({ title: "DAFTAR PUSTAKA", pageId: 'daftar-pustaka-1', isBold: true, isChapter: true });
@@ -1831,6 +2698,7 @@ export default function Index() {
       if (pageId.startsWith('daftar-isi-')) return sectionsToExport.includes('daftar-isi');
       if (pageId === 'daftar-tabel') return sectionsToExport.includes('daftar-tabel');
       if (pageId === 'daftar-gambar') return sectionsToExport.includes('daftar-gambar');
+      if (pageId === 'daftar-rumus') return sectionsToExport.includes('daftar-rumus');
       if (pageId.startsWith('bab1-')) return sectionsToExport.includes('bab1');
       if (pageId.startsWith('bab2-')) return sectionsToExport.includes('bab2');
       if (pageId.startsWith('bab3-')) return sectionsToExport.includes('bab3');
@@ -1937,6 +2805,112 @@ export default function Index() {
               flexEl.parentNode.replaceChild(p, flexEl);
             }
           }
+        });
+
+        // Transform dynamic flex equation containers to borderless tables for Word
+        contentClone.querySelectorAll('.equation-block').forEach(eqEl => {
+          // Find components
+          const titleDiv = eqEl.querySelector('.font-bold.text-xs.text-left');
+          const titleText = titleDiv ? titleDiv.innerHTML : '';
+          
+          // Formula and prefix
+          const formulaContainer = eqEl.querySelector('.flex.items-center.justify-between');
+          const formulaText = formulaContainer?.querySelector('.flex-1')?.innerHTML || '';
+          const prefixText = formulaContainer?.querySelector('.shrink-0')?.innerHTML || '';
+          
+          // Keterangan lines
+          const descContainer = eqEl.querySelector('.text-\\[10pt\\]');
+          const descLines = [];
+          if (descContainer) {
+            descContainer.querySelectorAll('div > div').forEach(lineEl => {
+              descLines.push(lineEl.innerHTML);
+            });
+          }
+          
+          // Construct Word-friendly HTML replacement
+          const newContainer = document.createElement('div');
+          newContainer.style.marginTop = '12pt';
+          newContainer.style.marginBottom = '12pt';
+          newContainer.style.textIndent = '0cm';
+          
+          if (titleText.trim()) {
+            const titleP = document.createElement('p');
+            titleP.style.margin = '0';
+            titleP.style.marginBottom = '6pt';
+            titleP.style.fontWeight = 'bold';
+            titleP.style.fontSize = '12pt';
+            titleP.style.textAlign = 'left';
+            titleP.style.fontFamily = cleanFontFamily;
+            titleP.innerHTML = titleText;
+            newContainer.appendChild(titleP);
+          }
+          
+          // Create the borderless table for centered formula and right-aligned numbering
+          const table = document.createElement('table');
+          table.setAttribute('border', '0');
+          table.setAttribute('cellspacing', '0');
+          table.setAttribute('cellpadding', '0');
+          table.style.borderCollapse = 'collapse';
+          table.style.width = '100%';
+          table.style.border = 'none';
+          table.style.marginTop = '6pt';
+          table.style.marginBottom = '6pt';
+          table.classList.add('border-none'); 
+          table.classList.add('equation-table'); 
+          
+          const tr = document.createElement('tr');
+          tr.style.border = 'none';
+          
+          const tdFormula = document.createElement('td');
+          tdFormula.style.width = '90%';
+          tdFormula.style.textAlign = 'center';
+          tdFormula.style.fontFamily = cleanFontFamily;
+          tdFormula.style.fontSize = '12pt';
+          tdFormula.style.fontWeight = 'bold';
+          tdFormula.style.fontStyle = 'italic';
+          tdFormula.style.border = 'none';
+          tdFormula.style.padding = '0';
+          tdFormula.innerHTML = formulaText;
+          
+          const tdPrefix = document.createElement('td');
+          tdPrefix.style.width = '10%';
+          tdPrefix.style.textAlign = 'right';
+          tdPrefix.style.fontFamily = cleanFontFamily;
+          tdPrefix.style.fontSize = '12pt';
+          tdPrefix.style.fontWeight = 'bold';
+          tdPrefix.style.border = 'none';
+          tdPrefix.style.padding = '0';
+          tdPrefix.innerHTML = prefixText;
+          
+          tr.appendChild(tdFormula);
+          tr.appendChild(tdPrefix);
+          table.appendChild(tr);
+          newContainer.appendChild(table);
+          
+          // Keterangan if exists
+          if (descLines.length > 0) {
+            const descP = document.createElement('p');
+            descP.style.margin = '0';
+            descP.style.marginTop = '6pt';
+            descP.style.marginBottom = '0pt';
+            descP.style.marginLeft = '1cm';
+            descP.style.textIndent = '0cm';
+            descP.style.fontFamily = cleanFontFamily;
+            descP.style.fontSize = '11pt';
+            descP.style.lineHeight = '1.2';
+            
+            let descHtml = '<span style="font-weight:bold;">Keterangan:</span><br/>';
+            descLines.forEach((line, lIdx) => {
+              descHtml += `<span style="font-style:italic;">${line}</span>`;
+              if (lIdx < descLines.length - 1) {
+                descHtml += '<br/>';
+              }
+            });
+            descP.innerHTML = descHtml;
+            newContainer.appendChild(descP);
+          }
+          
+          eqEl.parentNode.replaceChild(newContainer, eqEl);
         });
 
         // Ensure mock diagrams / empty image cards render nicely with borders in Word instead of collapsing
@@ -2048,9 +3022,27 @@ export default function Index() {
             const parentTable = el.closest('table');
             const tableHasBorder = parentTable && !parentTable.classList.contains('border-none');
             if (tableHasBorder) {
-              style += 'border: 1px solid #000; padding: 6px; ';
+              const ths = Array.from(parentTable.querySelectorAll('thead th'));
+              const cellIndex = Array.from(el.parentNode.children).indexOf(el);
+              const isNoCol = ths[cellIndex] && ths[cellIndex].textContent.trim().toLowerCase() === 'no';
+              style += `border: 1px solid #000; padding: 6px; vertical-align: top; text-align: ${isNoCol ? 'center' : 'left'}; `;
+            } else if (parentTable && parentTable.classList.contains('equation-table')) {
+              style += 'border: none; padding: 0px; ';
             } else {
               style += 'border: none; padding: 6px; ';
+            }
+
+            // Capture background color and colSpan/rowSpan for MS Word compatibility
+            const bgVal = el.style.backgroundColor || el.style.background;
+            if (bgVal) {
+              el.setAttribute('bgcolor', bgVal);
+              style += `background-color: ${bgVal}; `;
+            }
+            if (el.colSpan && el.colSpan > 1) {
+              el.setAttribute('colspan', String(el.colSpan));
+            }
+            if (el.rowSpan && el.rowSpan > 1) {
+              el.setAttribute('rowspan', String(el.rowSpan));
             }
           }
           
@@ -2226,14 +3218,16 @@ export default function Index() {
       if (downloadFormat === 'docx') {
         if (downloadSplit) {
           let sectionsToDownload = downloadRange === 'all' 
-            ? ['cover', 'persetujuan', 'pengesahan', 'pernyataan', 'abstrak-indo', 'abstrak-eng', 'daftar-isi', 'daftar-tabel', 'daftar-gambar', 'bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'daftar-pustaka']
+            ? ['cover', 'persetujuan', 'pengesahan', 'pernyataan', 'abstrak-indo', 'abstrak-eng', 'daftar-isi', 'daftar-tabel', 'daftar-gambar', 'daftar-rumus', 'bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'daftar-pustaka']
             : selectedDownloadSections;
             
           let delay = 0;
           sectionsToDownload.forEach((secId) => {
             const secPages = resolveSelectedPageIds([secId]);
             if (secPages.length > 0) {
-              const secName = SECTION_GROUPS.find(g => g.id === secId)?.name || secId;
+              const secName = secId.startsWith('bab') 
+                ? `${babTitles[secId].prefix} ${babTitles[secId].title}` 
+                : (SECTION_GROUPS.find(g => g.id === secId)?.name || secId);
               const cleanSecName = secName.replace(/[^a-zA-Z0-9]/g, "_");
               const filename = `${cleanAuthor}_${cleanSecName}`;
               
@@ -2253,7 +3247,7 @@ export default function Index() {
         // PDF format
         if (downloadSplit) {
           let sectionsToDownload = downloadRange === 'all' 
-            ? ['cover', 'persetujuan', 'pengesahan', 'pernyataan', 'abstrak-indo', 'abstrak-eng', 'daftar-isi', 'daftar-tabel', 'daftar-gambar', 'bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'daftar-pustaka']
+            ? ['cover', 'persetujuan', 'pengesahan', 'pernyataan', 'abstrak-indo', 'abstrak-eng', 'daftar-isi', 'daftar-tabel', 'daftar-gambar', 'daftar-rumus', 'bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'daftar-pustaka']
             : selectedDownloadSections;
 
           showToast("Mulai cetak PDF terpisah. Silakan klik simpan pada dialog cetak yang muncul.");
@@ -2299,10 +3293,11 @@ export default function Index() {
     const year = ref.year || 'n.d.';
     const title = ref.title || 'Untitled';
     const publisher = ref.publisher || '';
+    const urlLink = ref.url ? ` <a href="${ref.url}" target="_blank" rel="noopener noreferrer" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 underline font-semibold select-all text-[11px]">[URL]</a>` : '';
     if (ref.type === 'book') {
-      return `${author}. (${year}). <i>${title}</i>. ${publisher}.`;
+      return `${author}. (${year}). <i>${title}</i>. ${publisher}.${urlLink}`;
     } else {
-      return `${author}. (${year}). ${title}. <i>${publisher}</i>.`;
+      return `${author}. (${year}). ${title}. <i>${publisher}</i>.${urlLink}`;
     }
   };
 
@@ -2311,10 +3306,11 @@ export default function Index() {
     const year = ref.year || 'n.d.';
     const title = ref.title || 'Untitled';
     const publisher = ref.publisher || '';
+    const urlLink = ref.url ? ` <a href="${ref.url}" target="_blank" rel="noopener noreferrer" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 underline font-semibold select-all text-[11px]">[URL]</a>` : '';
     if (ref.type === 'book') {
-      return `${author}, <i>${title}</i>. ${publisher}, ${year}.`;
+      return `${author}, <i>${title}</i>. ${publisher}, ${year}.${urlLink}`;
     } else {
-      return `${author}, "${title}," <i>${publisher}</i>, ${year}.`;
+      return `${author}, "${title}," <i>${publisher}</i>, ${year}.${urlLink}`;
     }
   };
 
@@ -2403,6 +3399,7 @@ export default function Index() {
     
     pages.push('daftar-tabel');
     pages.push('daftar-gambar');
+    if (layout.showDaftarRumus) pages.push('daftar-rumus');
     
     // Now, push BAB pages dynamically!
     const babPagesMap = getBabPagesMap();
@@ -2471,7 +3468,7 @@ export default function Index() {
     // All preliminary/front-matter pages → bottom-center
     const preliminaryPrefixes = [
       'persetujuan', 'pengesahan', 'pernyataan', 
-      'abstrak-', 'daftar-isi-', 'daftar-tabel', 'daftar-gambar'
+      'abstrak-', 'daftar-isi-', 'daftar-tabel', 'daftar-gambar', 'daftar-rumus'
     ];
     if (preliminaryPrefixes.some(prefix => pageId === prefix || pageId.startsWith(prefix))) {
       return true;
@@ -2586,7 +3583,11 @@ export default function Index() {
           'Content-Type': 'application/json',
           'X-Gemini-Key': apiKey
         },
-        body: JSON.stringify({ query: scholarQuery })
+        body: JSON.stringify({ 
+          query: scholarQuery,
+          year_start: scholarYearStart,
+          year_end: scholarYearEnd
+        })
       });
 
       const resData = await response.json();
@@ -2611,7 +3612,8 @@ export default function Index() {
       author: citation.author,
       year: citation.year,
       title: citation.title,
-      publisher: citation.publisher
+      publisher: citation.publisher,
+      url: citation.url || ''
     };
     const updated = [...references, newRef];
     setReferences(updated);
@@ -2632,15 +3634,24 @@ export default function Index() {
     const rows = tableInput.rowsText.split('\n').map(row => row.split(',').map(c => c.trim()));
     const newTable = {
       id: 'tab_' + Date.now(),
+      type: 'table',
       title: tableInput.title,
-      bab: tableInput.bab,
       headers: tableInput.headers,
-      rows: rows
+      rows: rows,
+      rowsText: tableInput.rowsText,
+      page: 1
     };
 
-    const updated = [...tables, newTable];
-    setTables(updated);
-    saveLocalDraft({ tables: updated });
+    setBabSections(prev => {
+      const babKey = tableInput.bab;
+      const updated = {
+        ...prev,
+        [babKey]: [...(prev[babKey] || []), newTable]
+      };
+      saveLocalDraft({ babSections: updated });
+      return updated;
+    });
+
     setTableInput({ title: '', bab: 'bab3', headers: '', rowsText: '' });
     showToast('Tabel berhasil disematkan.');
   };
@@ -2653,15 +3664,179 @@ export default function Index() {
 
     const newFigure = {
       id: 'fig_' + Date.now(),
+      type: 'figure',
       title: figureInput.title,
-      bab: figureInput.bab
+      imageData: null,
+      page: 1
     };
 
-    const updated = [...figures, newFigure];
-    setFigures(updated);
-    saveLocalDraft({ figures: updated });
+    setBabSections(prev => {
+      const babKey = figureInput.bab;
+      const updated = {
+        ...prev,
+        [babKey]: [...(prev[babKey] || []), newFigure]
+      };
+      saveLocalDraft({ babSections: updated });
+      return updated;
+    });
+
     setFigureInput({ title: '', bab: 'bab1' });
     showToast('Gambar berhasil disematkan.');
+  };
+
+  const handleSplitTextAndInsert = (babKey, secId, insertType) => {
+    const list = babSections[babKey] || [];
+    const idx = list.findIndex(x => x.id === secId);
+    if (idx === -1) return;
+
+    const sec = list[idx];
+    const textareaId = inlineEditingBlockId ? `inline-textarea-${sec.id}` : `textarea-content-${sec.id}`;
+    const textarea = document.getElementById(textareaId);
+    
+    let contentBefore = sec.content || '';
+    let contentAfter = '';
+    
+    if (textarea) {
+      const start = textarea.selectionStart;
+      contentBefore = (sec.content || '').substring(0, start);
+      contentAfter = (sec.content || '').substring(start);
+    }
+
+    const newBlocks = [];
+
+    if (insertType === 'figure') {
+      newBlocks.push({
+        id: 'sec_fig_' + Date.now(),
+        type: 'figure',
+        title: 'Gambar Baru',
+        imageData: null,
+        page: 1
+      });
+    } else if (insertType === 'table') {
+      newBlocks.push({
+        id: 'sec_tab_' + Date.now(),
+        type: 'table',
+        title: 'Tabel Baru',
+        page: 1,
+        headers: 'No, Kolom 1, Kolom 2',
+        rowsText: '1, Data A, Data B\n2, Data C, Data D',
+        rows: [['1', 'Data A', 'Data B'], ['2', 'Data C', 'Data D']]
+      });
+    }
+
+    // Always create a headingless continuation block if there's remaining text
+    // OR if we just want to split the paragraph
+    if (contentAfter.trim() || insertType === 'split') {
+      newBlocks.push({
+        id: 'sec_para_' + (Date.now() + 1),
+        type: 'text',
+        headingLevel: 0,
+        title: '',
+        content: contentAfter.trim(),
+        page: 1,
+        numberingStyle: 'none'
+      });
+    }
+
+    setBabSections(prev => {
+      const babList = prev[babKey] || [];
+      const secIndex = babList.findIndex(x => x.id === secId);
+      if (secIndex === -1) return prev;
+
+      const updatedSec = { ...babList[secIndex], content: contentBefore.trim() };
+      const newList = [...babList];
+      newList[secIndex] = updatedSec;
+      newList.splice(secIndex + 1, 0, ...newBlocks);
+
+      const updated = { ...prev, [babKey]: newList };
+      saveLocalDraft({ babSections: updated });
+      return updated;
+    });
+
+    setInlineEditingBlockId(null);
+    setInlineEditingBabKey(null);
+
+    if (insertType === 'figure') {
+      showToast("Paragraf dipecah & Gambar disisipkan!");
+    } else if (insertType === 'table') {
+      showToast("Paragraf dipecah & Tabel disisipkan!");
+    } else {
+      showToast("Paragraf berhasil dipecah!");
+    }
+  };
+
+  const handleInsertSection = (babKey, referenceId, position, type = 'text') => {
+    setBabSections(prev => {
+      const currentList = prev[babKey] || [];
+      const idx = currentList.findIndex(sec => sec.id === referenceId);
+      if (idx === -1) return prev;
+      
+      let newBlock = {};
+      const timestamp = Date.now();
+      if (type === 'table') {
+        newBlock = {
+          id: 'sec_tab_' + timestamp,
+          type: 'table',
+          title: 'Tabel Baru',
+          page: 1,
+          headers: 'No, Kolom 1, Kolom 2',
+          rowsText: '1, Data A, Data B\n2, Data C, Data D',
+          rows: [['1', 'Data A', 'Data B'], ['2', 'Data C', 'Data D']]
+        };
+      } else if (type === 'figure') {
+        newBlock = {
+          id: 'sec_fig_' + timestamp,
+          type: 'figure',
+          title: 'Gambar Baru',
+          page: 1,
+          imageData: null
+        };
+      } else if (type === 'sub-bab') {
+        newBlock = {
+          id: 'sec_sub_' + timestamp,
+          type: 'text',
+          headingLevel: 2,
+          title: 'Sub-Bab Baru',
+          content: '',
+          page: 1,
+          numberingStyle: 'bab_prefix_dot'
+        };
+      } else if (type === 'equation') {
+        newBlock = {
+          id: 'sec_eq_' + timestamp,
+          type: 'equation',
+          title: 'Persamaan Baru',
+          content: 'y = a + bx',
+          description: 'y = Variabel Dependen\na = Konstanta\nb = Koefisien\nx = Variabel Independen',
+          page: 1
+        };
+      } else {
+        newBlock = {
+          id: 'sec_para_' + timestamp,
+          type: 'text',
+          headingLevel: 0,
+          title: '',
+          content: '',
+          page: 1,
+          numberingStyle: 'none'
+        };
+      }
+      
+      const insertIdx = position === 'above' ? idx : idx + 1;
+      const updatedList = [...currentList];
+      updatedList.splice(insertIdx, 0, newBlock);
+      
+      const updated = {
+        ...prev,
+        [babKey]: updatedList
+      };
+      saveLocalDraft({ babSections: updated });
+      return updated;
+    });
+
+    const displayType = type === 'sub-bab' ? 'Sub-Bab' : type === 'text' ? 'Paragraf' : type === 'table' ? 'Tabel' : type === 'figure' ? 'Gambar' : type === 'equation' ? 'Rumus' : 'Konten';
+    const displayPos = position === 'above' ? 'di atas' : 'di bawah';
+    showToast(`${displayType} baru berhasil ditambahkan ${displayPos}!`);
   };
 
   // ==========================================================================
@@ -2883,7 +4058,7 @@ export default function Index() {
     }
     
     const draftPayload = {
-      layout, cover, babSections, references, refStyle, 
+      layout, cover, coverElements, babSections, babTitles, references, refStyle, 
       tables: getAllTables(), 
       figures: getAllFigures(),
       abstrakIndo, abstrakIndoKeywords, abstrakEng, abstrakEngKeywords, headingStyles
@@ -2928,8 +4103,35 @@ export default function Index() {
 
       if (response.ok) {
         const data = await response.json();
+        let loadedBabSections = babSections;
         if (data.layout) setLayout(data.layout);
         if (data.cover) setCover(data.cover);
+        
+        if (data.coverElements) {
+          setCoverElements(data.coverElements);
+        } else if (data.cover) {
+          // Re-generate coverElements from loaded cover fields for compatibility
+          const resolvedElements = defaultCoverElements.map(el => {
+            if (el.field === 'title' && data.cover.title) return { ...el, value: data.cover.title };
+            if (el.field === 'subtitle' && data.cover.subtitle) return { ...el, value: data.cover.subtitle };
+            if (el.field === 'author' && data.cover.author) return { ...el, value: data.cover.author };
+            if (el.field === 'nim' && data.cover.nim) return { ...el, value: data.cover.nim };
+            if (el.field === 'prodi' && data.cover.prodi) return { ...el, value: `PROGRAM STUDI ${data.cover.prodi.toUpperCase()}` };
+            if (el.field === 'fakultas' && data.cover.fakultas) return { ...el, value: `FAKULTAS ${data.cover.fakultas.toUpperCase()}` };
+            if (el.field === 'univ' && data.cover.univ) return { ...el, value: data.cover.univ };
+            if (el.field === 'city_year') {
+              const city = data.cover.city || 'JAKARTA';
+              const year = data.cover.year || '2026';
+              return { ...el, value: `${city.toUpperCase()}, ${year}` };
+            }
+            if (el.type === 'logo') {
+              return { ...el, logoType: data.cover.logoType || 'default', logoData: data.cover.logoData || null };
+            }
+            return el;
+          });
+          setCoverElements(resolvedElements);
+        }
+
         if (data.babSections) {
           // Upgrade/merge tables/figures if they are in data.tables/data.figures but not in babSections
           let incomingBabSections = data.babSections;
@@ -2972,9 +4174,11 @@ export default function Index() {
             });
           }
           setBabSections(incomingBabSections);
+          loadedBabSections = incomingBabSections;
         } else {
           const upgraded = convertOldDraftToSections(data);
           setBabSections(upgraded);
+          loadedBabSections = upgraded;
         }
         if (data.references) setReferences(data.references);
         if (data.refStyle) setRefStyle(data.refStyle);
@@ -2984,10 +4188,56 @@ export default function Index() {
         if (data.abstrakEngKeywords) setAbstrakEngKeywords(data.abstrakEngKeywords);
         if (data.headingStyles) setHeadingStyles(data.headingStyles);
         
+        const fallbackBabTitles = data.babTitles || {
+          bab1: { prefix: "BAB I", title: "PENDAHULUAN" },
+          bab2: { prefix: "BAB II", title: "TINJAUAN PUSTAKA" },
+          bab3: { prefix: "BAB III", title: "METODOLOGI PENELITIAN" },
+          bab4: { prefix: "BAB IV", title: "HASIL DAN PEMBAHASAN" },
+          bab5: { prefix: "BAB V", title: "KESIMPULAN DAN SARAN" }
+        };
+        setBabTitles(fallbackBabTitles);
+        
         saveLocalDraft(data);
         setHasLocalDraft(true);
         setShowDraftsModal(false);
         setShowWelcomeModal(false);
+        
+        setSaveFilename(item.title);
+        const loadedPayload = {
+          layout: data.layout || layout,
+          cover: data.cover || cover,
+          coverElements: data.coverElements || data.cover ? defaultCoverElements.map(el => {
+            if (el.field === 'title' && data.cover.title) return { ...el, value: data.cover.title };
+            if (el.field === 'subtitle' && data.cover.subtitle) return { ...el, value: data.cover.subtitle };
+            if (el.field === 'author' && data.cover.author) return { ...el, value: data.cover.author };
+            if (el.field === 'nim' && data.cover.nim) return { ...el, value: data.cover.nim };
+            if (el.field === 'prodi' && data.cover.prodi) return { ...el, value: `PROGRAM STUDI ${data.cover.prodi.toUpperCase()}` };
+            if (el.field === 'fakultas' && data.cover.fakultas) return { ...el, value: `FAKULTAS ${data.cover.fakultas.toUpperCase()}` };
+            if (el.field === 'univ' && data.cover.univ) return { ...el, value: data.cover.univ };
+            if (el.field === 'city_year') {
+              const city = data.cover.city || 'JAKARTA';
+              const year = data.cover.year || '2026';
+              return { ...el, value: `${city.toUpperCase()}, ${year}` };
+            }
+            if (el.type === 'logo') {
+              return { ...el, logoType: data.cover.logoType || 'default', logoData: data.cover.logoData || null };
+            }
+            return el;
+          }) : coverElements,
+          babSections: loadedBabSections,
+          babTitles: fallbackBabTitles,
+          references: data.references || references,
+          refStyle: data.refStyle || refStyle,
+          tables: data.tables || getAllTables(loadedBabSections),
+          figures: data.figures || getAllFigures(loadedBabSections),
+          abstrakIndo: data.abstrakIndo || abstrakIndo,
+          abstrakIndoKeywords: data.abstrakIndoKeywords || abstrakIndoKeywords,
+          abstrakEng: data.abstrakEng || abstrakEng,
+          abstrakEngKeywords: data.abstrakEngKeywords || abstrakEngKeywords,
+          headingStyles: data.headingStyles || headingStyles
+        };
+        lastSavedPayloadRef.current = JSON.stringify(loadedPayload);
+        
         showToast(`Draft "${item.title}" berhasil dimuat.`);
       }
     } catch (e) {
@@ -3032,7 +4282,13 @@ export default function Index() {
     }
   };
 
-  const handleAIGenerateSection = async (sectionKey, displayTitle) => {
+  const triggerAIGenerateFlow = (target) => {
+    setAiPromptInput('');
+    setAiPromptTarget(target);
+    setShowAiPromptModal(true);
+  };
+
+  const handleAIGenerateSection = async (sectionKey, displayTitle, additionalPrompt = '') => {
     if (!apiKey) {
       showToast('Masukkan API Key Gemini terlebih dahulu!', true);
       return;
@@ -3054,7 +4310,11 @@ export default function Index() {
           title: cover.title,
           section: sectionKey,
           topik: aiInputs.topik,
-          metode: tables.length > 0 ? 'Fuzzy/KNN/PLS-SEM' : 'Metode Deskriptif'
+          metode: tables.length > 0 ? 'Fuzzy/KNN/PLS-SEM' : 'Metode Deskriptif',
+          ai_write_style: sectionKey === 'latar_belakang' ? backgroundStyle : 'direct',
+          year_start: scholarYearStart,
+          year_end: scholarYearEnd,
+          additional_prompt: additionalPrompt
         })
       });
 
@@ -3082,6 +4342,58 @@ export default function Index() {
       else if (sectionKey === 'kesimpulan') updateSectionContentById('bab5', 'b5s1', content);
       else if (sectionKey === 'saran') updateSectionContentById('bab5', 'b5s2', content);
 
+      // Handle table auto-insertion if present in JSON response
+      if (resData.table) {
+        const sectionMapping = {
+          latar_belakang: { babKey: 'bab1', blockId: 'b1s1' },
+          identifikasi_masalah: { babKey: 'bab1', blockId: 'b1s2' },
+          rumusan_masalah: { babKey: 'bab1', blockId: 'b1s3' },
+          penelitian_terdahulu: { babKey: 'bab2', blockId: 'b2s1' },
+          grand_theory: { babKey: 'bab2', blockId: 'b2s2' },
+          middle_theory: { babKey: 'bab2', blockId: 'b2s3' },
+          applied_theory: { babKey: 'bab2', blockId: 'b2s4' },
+          desain_penelitian: { babKey: 'bab3', blockId: 'b3s1' },
+          tempat_waktu: { babKey: 'bab3', blockId: 'b3s2' },
+          pengumpulan_data: { babKey: 'bab3', blockId: 'b3s3' },
+          analisis_data: { babKey: 'bab3', blockId: 'b3s4' },
+          deskripsi_data: { babKey: 'bab4', blockId: 'b4s1' },
+          pembahasan: { babKey: 'bab4', blockId: 'b4s2' },
+          kesimpulan: { babKey: 'bab5', blockId: 'b5s1' },
+          saran: { babKey: 'bab5', blockId: 'b5s2' },
+        };
+        const mapping = sectionMapping[sectionKey];
+        if (mapping) {
+          const { babKey, blockId } = mapping;
+          const tableData = resData.table;
+          setBabSections(prev => {
+            const currentList = prev[babKey] || [];
+            const idx = currentList.findIndex(sec => sec.id === blockId);
+            if (idx === -1) return prev;
+            
+            const newBlock = {
+              id: 'sec_tab_' + Date.now(),
+              type: 'table',
+              title: tableData.title || 'Tabel Hasil Generasi',
+              page: 1,
+              headers: tableData.headers || 'No, Kolom 1, Kolom 2',
+              rowsText: Array.isArray(tableData.rows) ? tableData.rows.map(r => r.join(', ')).join('\n') : '',
+              rows: tableData.rows || [['1', 'Data A', 'Data B']]
+            };
+            
+            const updatedList = [...currentList];
+            updatedList.splice(idx + 1, 0, newBlock);
+            
+            const updated = {
+              ...prev,
+              [babKey]: updatedList
+            };
+            saveLocalDraft({ babSections: updated });
+            return updated;
+          });
+          showToast(`Tabel perbandingan berhasil disisipkan secara otomatis!`);
+        }
+      }
+
       showToast(`Konten ${displayTitle} berhasil ditulis oleh AI!`);
     } catch (e) {
       showToast('Koneksi terganggu: ' + e.message, true);
@@ -3091,7 +4403,7 @@ export default function Index() {
   };
 
   // Dynamic AI generation for any section (e.g., imported from DOCX)
-  const handleAIGenerateDynamic = async (babKey, sectionId, sectionTitle) => {
+  const handleAIGenerateDynamic = async (babKey, sectionId, sectionTitle, additionalPrompt = '') => {
     if (!apiKey) {
       showToast('Masukkan API Key Gemini terlebih dahulu!', true);
       return;
@@ -3099,10 +4411,9 @@ export default function Index() {
     setGeneratingSection(sectionId);
     showToast(`Menghubungi Gemini untuk draf "${sectionTitle}"...`);
 
-    // Determine bab number and context
-    const babNum = babKey.replace('bab', '');
-    const babNames = { '1': 'PENDAHULUAN', '2': 'TINJAUAN PUSTAKA', '3': 'METODOLOGI PENELITIAN', '4': 'HASIL DAN PEMBAHASAN', '5': 'PENUTUP' };
-    const babContext = `BAB ${babNum} (${babNames[babNum] || 'Bab ' + babNum})`;
+    // Determine bab number and context dynamically from babTitles
+    const currentBab = babTitles[babKey];
+    const babContext = currentBab ? `${currentBab.prefix} (${currentBab.title})` : `BAB ${babKey.replace('bab', '')}`;
 
     try {
       const response = await fetch('/thesis/generate', {
@@ -3117,7 +4428,8 @@ export default function Index() {
           section_title: sectionTitle,
           bab_context: babContext,
           topik: aiInputs.topik,
-          metode: tables.length > 0 ? 'Fuzzy/KNN/PLS-SEM' : 'Metode Deskriptif'
+          metode: tables.length > 0 ? 'Fuzzy/KNN/PLS-SEM' : 'Metode Deskriptif',
+          additional_prompt: additionalPrompt
         })
       });
 
@@ -3128,6 +4440,38 @@ export default function Index() {
       }
 
       updateSectionContentById(babKey, sectionId, resData.content);
+
+      // Handle table auto-insertion if present in JSON response
+      if (resData.table) {
+        const tableData = resData.table;
+        setBabSections(prev => {
+          const currentList = prev[babKey] || [];
+          const idx = currentList.findIndex(sec => sec.id === sectionId);
+          if (idx === -1) return prev;
+          
+          const newBlock = {
+            id: 'sec_tab_' + Date.now(),
+            type: 'table',
+            title: tableData.title || 'Tabel Hasil Generasi',
+            page: 1,
+            headers: tableData.headers || 'No, Kolom 1, Kolom 2',
+            rowsText: Array.isArray(tableData.rows) ? tableData.rows.map(r => r.join(', ')).join('\n') : '',
+            rows: tableData.rows || [['1', 'Data A', 'Data B']]
+          };
+          
+          const updatedList = [...currentList];
+          updatedList.splice(idx + 1, 0, newBlock);
+          
+          const updated = {
+            ...prev,
+            [babKey]: updatedList
+          };
+          saveLocalDraft({ babSections: updated });
+          return updated;
+        });
+        showToast(`Tabel perbandingan berhasil disisipkan secara otomatis!`);
+      }
+
       showToast(`Konten "${sectionTitle}" berhasil ditulis oleh AI!`);
     } catch (e) {
       showToast('Koneksi terganggu: ' + e.message, true);
@@ -3414,6 +4758,32 @@ export default function Index() {
                       <input type="checkbox" checked={layout.showAbstractEng} onChange={e=>handleLayoutChange('showAbstractEng', e.target.checked)} className="rounded text-indigo-600 focus:ring-indigo-500" />
                       <span>Abstract English</span>
                     </label>
+                    <label className="flex items-center gap-2 cursor-pointer p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800">
+                      <input type="checkbox" checked={layout.showDaftarRumus} onChange={e=>handleLayoutChange('showDaftarRumus', e.target.checked)} className="rounded text-indigo-600 focus:ring-indigo-500" />
+                      <span>Daftar Rumus (Persamaan)</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Auto Save Settings */}
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
+                  <h3 className="font-bold text-slate-400 uppercase text-[10px]">Penyimpanan & Auto Save</h3>
+                  <div className="flex flex-col gap-1.5 text-[10px] text-slate-350">
+                    <label className="flex items-center gap-2 cursor-pointer p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-850">
+                      <input 
+                        type="checkbox" 
+                        checked={autosaveEnabled} 
+                        onChange={e => {
+                          setAutosaveEnabled(e.target.checked);
+                          saveLocalDraftSetting(e.target.checked);
+                        }} 
+                        className="rounded text-indigo-600 focus:ring-indigo-500" 
+                      />
+                      <span>Aktifkan Simpan Otomatis (Auto Save) ke Server</span>
+                    </label>
+                    <p className="text-[8.5px] text-slate-400 pl-6 leading-snug">
+                      Menyimpan perubahan draf ke database setiap 2 detik secara otomatis jika terdeteksi adanya perubahan.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -3538,11 +4908,11 @@ export default function Index() {
                     {(layout.showAbstractIndo || layout.showAbstractEng) && (
                       <option value="abstrak">Abstrak (Indonesia / Inggris)</option>
                     )}
-                    <option value="bab1">BAB I PENDAHULUAN</option>
-                    <option value="bab2">BAB II TINJAUAN PUSTAKA (Teori Grand/Middle)</option>
-                    <option value="bab3">BAB III METODOLOGI PENELITIAN (Tabel & Gambar)</option>
-                    <option value="bab4">BAB IV HASIL DAN PEMBAHASAN</option>
-                    <option value="bab5">BAB V PENUTUP</option>
+                    <option value="bab1">{babTitles.bab1.prefix} {babTitles.bab1.title}</option>
+                    <option value="bab2">{babTitles.bab2.prefix} {babTitles.bab2.title}</option>
+                    <option value="bab3">{babTitles.bab3.prefix} {babTitles.bab3.title}</option>
+                    <option value="bab4">{babTitles.bab4.prefix} {babTitles.bab4.title}</option>
+                    <option value="bab5">{babTitles.bab5.prefix} {babTitles.bab5.title}</option>
                     <option value="elemen">Kelola Tabel & Gambar Dokumen</option>
                   </select>
                 </div>
@@ -3778,8 +5148,38 @@ export default function Index() {
                   <div className="space-y-4">
                     {layout.showAbstractIndo && (
                       <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
-                        <span className="font-bold text-slate-400 text-[10px] block">Abstrak (Bahasa Indonesia)</span>
-                        <textarea value={abstrakIndo} onChange={e=>{setAbstrakIndo(e.target.value); saveLocalDraft({abstrakIndo:e.target.value})}} rows={6} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg" />
+                        <div className="flex justify-between items-center mb-0.5">
+                          <span className="font-bold text-slate-400 text-[10px] block">Abstrak (Bahasa Indonesia)</span>
+                          {abstrakIndo && (abstrakIndo.includes('\n') || abstrakIndo.includes('\r')) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const cleaned = cleanLineBreaks(abstrakIndo);
+                                setAbstrakIndo(cleaned);
+                                saveLocalDraft({ abstrakIndo: cleaned });
+                                showToast("Abstrak Indonesia berhasil dirapikan!");
+                              }}
+                              className="text-[9px] text-indigo-500 hover:text-indigo-600 dark:text-indigo-400 dark:hover:text-indigo-300 font-bold flex items-center gap-0.5 transition-colors"
+                              title="Menggabungkan baris yang terputus akibat copy-paste dari PDF"
+                            >
+                              ✨ Rapikan Baris/Spasi (PDF)
+                            </button>
+                          )}
+                        </div>
+                        <textarea 
+                          value={abstrakIndo} 
+                          onChange={e=>{setAbstrakIndo(e.target.value); saveLocalDraft({abstrakIndo:e.target.value})}} 
+                          onPaste={(e) => {
+                            const pastedText = e.clipboardData.getData('text');
+                            if (pastedText && (pastedText.includes('\n') || pastedText.includes('\r'))) {
+                              setTimeout(() => {
+                                showToast("Tips: Klik tombol '✨ Rapikan Baris/Spasi (PDF)' di atas untuk merapikan teks.");
+                              }, 500);
+                            }
+                          }}
+                          rows={6} 
+                          className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg" 
+                        />
                         
                         <label className="text-[10px] text-slate-400 block mb-0.5">Kata Kunci</label>
                         <input type="text" value={abstrakIndoKeywords} onChange={e=>{setAbstrakIndoKeywords(e.target.value); saveLocalDraft({abstrakIndoKeywords:e.target.value})}} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg" />
@@ -3788,8 +5188,38 @@ export default function Index() {
                     
                     {layout.showAbstractEng && (
                       <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
-                        <span className="font-bold text-slate-400 text-[10px] block">Abstract (English)</span>
-                        <textarea value={abstrakEng} onChange={e=>{setAbstrakEng(e.target.value); saveLocalDraft({abstrakEng:e.target.value})}} rows={6} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg" />
+                        <div className="flex justify-between items-center mb-0.5">
+                          <span className="font-bold text-slate-400 text-[10px] block">Abstract (English)</span>
+                          {abstrakEng && (abstrakEng.includes('\n') || abstrakEng.includes('\r')) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const cleaned = cleanLineBreaks(abstrakEng);
+                                setAbstrakEng(cleaned);
+                                saveLocalDraft({ abstrakEng: cleaned });
+                                showToast("Abstract English berhasil dirapikan!");
+                              }}
+                              className="text-[9px] text-indigo-500 hover:text-indigo-600 dark:text-indigo-400 dark:hover:text-indigo-300 font-bold flex items-center gap-0.5 transition-colors"
+                              title="Menggabungkan baris yang terputus akibat copy-paste dari PDF"
+                            >
+                              ✨ Rapikan Baris/Spasi (PDF)
+                            </button>
+                          )}
+                        </div>
+                        <textarea 
+                          value={abstrakEng} 
+                          onChange={e=>{setAbstrakEng(e.target.value); saveLocalDraft({abstrakEng:e.target.value})}} 
+                          onPaste={(e) => {
+                            const pastedText = e.clipboardData.getData('text');
+                            if (pastedText && (pastedText.includes('\n') || pastedText.includes('\r'))) {
+                              setTimeout(() => {
+                                showToast("Tips: Klik tombol '✨ Rapikan Baris/Spasi (PDF)' di atas untuk merapikan teks.");
+                              }, 500);
+                            }
+                          }}
+                          rows={6} 
+                          className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg" 
+                        />
                         
                         <label className="text-[10px] text-slate-400 block mb-0.5">Keywords</label>
                         <input type="text" value={abstrakEngKeywords} onChange={e=>{setAbstrakEngKeywords(e.target.value); saveLocalDraft({abstrakEngKeywords:e.target.value})}} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg" />
@@ -3801,12 +5231,83 @@ export default function Index() {
                 {/* Flexible Chapter Editor */}
                 {activeSection.startsWith('bab') && (
                   <div className="space-y-4">
+                    {/* Chapter Title Editor */}
+                    <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
+                      <span className="font-bold text-[10px] uppercase text-indigo-500 dark:text-indigo-400 block mb-1">Edit Judul {babTitles[activeSection]?.prefix || 'BAB'}</span>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="col-span-1">
+                          <label className="text-[9px] text-slate-400 block mb-0.5">Penomoran</label>
+                          <input 
+                            type="text" 
+                            value={babTitles[activeSection]?.prefix || ''} 
+                            onChange={e => {
+                              const updated = {
+                                ...babTitles,
+                                [activeSection]: {
+                                  ...babTitles[activeSection],
+                                  prefix: e.target.value
+                                }
+                              };
+                              setBabTitles(updated);
+                              saveLocalDraft({ babTitles: updated });
+                            }}
+                            className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs font-bold"
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <label className="text-[9px] text-slate-400 block mb-0.5">Nama Bab</label>
+                          <input 
+                            type="text" 
+                            value={babTitles[activeSection]?.title || ''} 
+                            onChange={e => {
+                              const updated = {
+                                ...babTitles,
+                                [activeSection]: {
+                                  ...babTitles[activeSection],
+                                  title: e.target.value
+                                }
+                              };
+                              setBabTitles(updated);
+                              saveLocalDraft({ babTitles: updated });
+                            }}
+                            className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs font-bold"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
                     <div className="flex justify-between items-center bg-indigo-600/10 p-2.5 rounded-xl border border-indigo-500/20">
                       <span className="font-bold text-[10px] uppercase text-indigo-555 dark:text-indigo-400">Kelola Sub-Bab & Konten</span>
                       <div className="flex gap-1 flex-wrap">
                         <button 
+                          onClick={() => {
+                            setBabSections(prev => {
+                              const newBlock = {
+                                id: 'sec_' + Date.now(),
+                                type: 'text',
+                                headingLevel: 0,
+                                title: '',
+                                content: '',
+                                page: 1,
+                                numberingStyle: 'none'
+                              };
+                              const updated = {
+                                ...prev,
+                                [activeSection]: [...(prev[activeSection] || []), newBlock]
+                              };
+                              saveLocalDraft({ babSections: updated });
+                              return updated;
+                            });
+                          }} 
+                          className="bg-sky-600 hover:bg-sky-700 text-white px-2 py-1 rounded flex items-center gap-1 font-bold text-[9px]"
+                          title="Tambah paragraf konten tanpa judul heading"
+                        >
+                          <Plus className="h-3 w-3" /> Paragraf
+                        </button>
+                        <button 
                           onClick={() => handleAddSection(activeSection, 'text')} 
                           className="bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded flex items-center gap-1 font-bold text-[9px]"
+                          title="Tambah sub-bab baru dengan judul heading"
                         >
                           <Plus className="h-3 w-3" /> Sub-Bab
                         </button>
@@ -3823,6 +5324,13 @@ export default function Index() {
                           <ImageIcon className="h-3 w-3" /> Gambar
                         </button>
                         <button 
+                          onClick={() => handleAddSection(activeSection, 'equation')} 
+                          className="bg-indigo-750 hover:bg-indigo-850 text-white px-2 py-1 rounded flex items-center gap-1 font-bold text-[9px]"
+                          title="Tambah rumus/persamaan baru"
+                        >
+                          <Plus className="h-3 w-3" /> Rumus
+                        </button>
+                        <button 
                           onClick={handleResetToOutline} 
                           className="bg-amber-600 hover:bg-amber-700 text-white px-2 py-1 rounded flex items-center gap-1 font-bold text-[9px]"
                           title="Hapus semua isi paragraf, sisakan judul heading saja"
@@ -3835,11 +5343,17 @@ export default function Index() {
                     <div className="space-y-3">
                       {resolveBlockNumberingForBab(activeSection, babSections[activeSection] || []).map((sec, idx) => (
                         <div key={sec.id} className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
-                          <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800/60 pb-1.5">
-                            <span className="font-bold text-slate-400 text-[10px]">
-                              {sec.type === 'table' ? 'Tabel' : sec.type === 'figure' ? 'Gambar' : 'Sub-Bab'} #{idx + 1}
-                              {sec.resolvedPrefix && ` (Pratinjau: ${sec.resolvedPrefix.trim()})`}
-                            </span>
+                           <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800/60 pb-1.5">
+                             <span className="font-bold text-slate-400 text-[10px]">
+                               {sec.type === 'table' 
+                                 ? 'Tabel' 
+                                 : sec.type === 'figure' 
+                                   ? 'Gambar' 
+                                   : sec.headingLevel === 0 
+                                     ? 'Paragraf Konten' 
+                                     : 'Sub-Bab'} #{idx + 1}
+                               {sec.headingLevel > 0 && sec.resolvedPrefix && ` (Pratinjau: ${sec.resolvedPrefix.trim()})`}
+                             </span>
                             
                             <div className="flex items-center gap-1">
                               <button 
@@ -3864,59 +5378,387 @@ export default function Index() {
                               </button>
                             </div>
                           </div>
+                           {sec.type === 'table' ? (
+                             <div className="space-y-2">
+                               <div>
+                                 <label className="text-[9px] text-slate-400 block mb-0.5">Judul Tabel (Caption)</label>
+                                 <input 
+                                   type="text" 
+                                   value={sec.title} 
+                                   onChange={e => handleUpdateSectionField(activeSection, sec.id, 'title', e.target.value)} 
+                                   className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs" 
+                                 />
+                               </div>
+                               
+                               <div className="flex bg-slate-100 dark:bg-slate-950 p-0.5 gap-0.5 rounded text-[9px] font-bold mb-2">
+                                 <button 
+                                   type="button" 
+                                   onClick={() => setActiveTableTab('visual')} 
+                                   className={`flex-1 py-1 rounded text-center transition-all ${activeTableTab === 'visual' ? 'bg-white dark:bg-slate-900 text-indigo-500 shadow-sm' : 'text-slate-400'}`}
+                                 >
+                                   Visual
+                                 </button>
+                                 <button 
+                                   type="button" 
+                                   onClick={() => setActiveTableTab('csv')} 
+                                   className={`flex-1 py-1 rounded text-center transition-all ${activeTableTab === 'csv' ? 'bg-white dark:bg-slate-900 text-indigo-500 shadow-sm' : 'text-slate-400'}`}
+                                 >
+                                   Teks CSV
+                                 </button>
+                               </div>
 
-                          {sec.type === 'table' ? (
-                            <div className="space-y-2">
-                              <div>
-                                <label className="text-[9px] text-slate-400 block mb-0.5">Judul Tabel (Caption)</label>
-                                <input 
-                                  type="text" 
-                                  value={sec.title} 
-                                  onChange={e => handleUpdateSectionField(activeSection, sec.id, 'title', e.target.value)} 
-                                  className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs" 
-                                />
-                              </div>
-                              <div className="grid grid-cols-2 gap-2">
-                                <div>
-                                  <label className="text-[9px] text-slate-400 block mb-0.5">Letak Halaman</label>
-                                  <div className="w-full bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-350">
-                                    Halaman {getBlockPageNumber(activeSection, sec.id) || '(Membaca...)'}
-                                  </div>
+                               {activeTableTab === 'visual' ? (
+                                 <div className="space-y-2">
+                                   <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-lg p-1.5 bg-slate-50 dark:bg-slate-900/50">
+                                     <table className="min-w-full border-collapse text-[9px] text-slate-800 dark:text-slate-200 bg-white dark:bg-slate-950">
+                                       <thead>
+                                         <tr className="bg-slate-100 dark:bg-slate-900">
+                                           {normalizeHeaders(sec.headers).map((h, cIdx) => {
+                                             const hMask = computeMaskedHeaders(normalizeHeaders(sec.headers));
+                                             if (hMask[cIdx]) return null;
+                                             const isSelected = selectedCell && selectedCell.blockId === sec.id && selectedCell.r === -1 && selectedCell.c === cIdx;
+                                             return (
+                                               <th
+                                                 key={cIdx}
+                                                 colSpan={h.colSpan || 1}
+                                                 rowSpan={h.rowSpan || 1}
+                                                 onClick={() => setSelectedCell({ blockId: sec.id, r: -1, c: cIdx })}
+                                                 style={{ backgroundColor: h.bgColor || undefined }}
+                                                 className={`border border-slate-350 dark:border-slate-700 p-1 cursor-pointer select-none font-bold text-left ${isSelected ? 'outline outline-2 outline-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30' : 'hover:bg-slate-100 dark:hover:bg-slate-805'}`}
+                                               >
+                                                 <div className="truncate max-w-[60px]">{h.text || <span className="text-slate-400 italic">(kosong)</span>}</div>
+                                               </th>
+                                             );
+                                           })}
+                                         </tr>
+                                       </thead>
+                                       <tbody>
+                                         {normalizeTableRows(sec.rows).map((row, rIdx) => {
+                                           const rMask = computeMaskedCells(normalizeTableRows(sec.rows));
+                                           return (
+                                             <tr key={rIdx}>
+                                               {row.map((cell, cIdx) => {
+                                                 if (rMask[rIdx] && rMask[rIdx][cIdx]) return null;
+                                                 const isSelected = selectedCell && selectedCell.blockId === sec.id && selectedCell.r === rIdx && selectedCell.c === cIdx;
+                                                 return (
+                                                   <td
+                                                     key={cIdx}
+                                                     colSpan={cell.colSpan || 1}
+                                                     rowSpan={cell.rowSpan || 1}
+                                                     onClick={() => setSelectedCell({ blockId: sec.id, r: rIdx, c: cIdx })}
+                                                     style={{ backgroundColor: cell.bgColor || undefined }}
+                                                     className={`border border-slate-200 dark:border-slate-800 p-1 cursor-pointer select-none ${isSelected ? 'outline outline-2 outline-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30' : 'hover:bg-slate-50 dark:hover:bg-slate-900/50'}`}
+                                                   >
+                                                     <div className="truncate max-w-[60px]">{cell.text || <span className="text-slate-400 italic">(kosong)</span>}</div>
+                                                   </td>
+                                                 );
+                                               })}
+                                             </tr>
+                                           );
+                                         })}
+                                       </tbody>
+                                     </table>
+                                   </div>
+
+                                   {(() => {
+                                     if (!selectedCell || selectedCell.blockId !== sec.id) {
+                                       return <div className="text-[9px] text-slate-400 italic text-center p-1">Klik sel di grid atas untuk mengedit teks, merge, atau mewarnai.</div>;
+                                     }
+                                     
+                                     const isHeader = selectedCell.r === -1;
+                                     const normH = normalizeHeaders(sec.headers);
+                                     const normR = normalizeTableRows(sec.rows);
+                                     const cellObj = isHeader ? normH[selectedCell.c] : (normR[selectedCell.r] ? normR[selectedCell.r][selectedCell.c] : null);
+                                     if (!cellObj) return null;
+
+                                     const canMergeRight = isHeader 
+                                       ? selectedCell.c + (cellObj.colSpan || 1) < normH.length 
+                                       : selectedCell.c + (cellObj.colSpan || 1) < (normR[selectedCell.r]?.length || 0);
+                                     const canMergeDown = !isHeader && (selectedCell.r + (cellObj.rowSpan || 1) < normR.length);
+
+                                     const PRESET_COLORS = [
+                                       { name: 'Putih', value: '' },
+                                       { name: 'Abu-abu', value: '#f1f5f9' },
+                                       { name: 'Biru', value: '#e0f2fe' },
+                                       { name: 'Hijau', value: '#dcfce7' },
+                                       { name: 'Kuning', value: '#fef3c7' },
+                                       { name: 'Merah', value: '#ffe4e6' }
+                                     ];
+
+                                     return (
+                                       <div className="p-2 bg-slate-100/50 dark:bg-slate-950/30 border border-slate-200 dark:border-slate-800 rounded-lg space-y-2 text-[10px] animate-in fade-in duration-100">
+                                         <div className="font-bold text-slate-400 uppercase text-[8px]">Sel Terpilih ({isHeader ? 'Header' : `Baris ${selectedCell.r + 1}`}, Kolom {selectedCell.c + 1})</div>
+                                         
+                                         <div>
+                                           <label className="text-[9px] text-slate-400 block mb-0.5">Teks Sel</label>
+                                           <input
+                                             type="text"
+                                             value={cellObj.text}
+                                             onChange={e => updateTableCell(activeSection, sec.id, selectedCell.r, selectedCell.c, 'text', e.target.value)}
+                                             className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1 rounded-lg text-xs"
+                                           />
+                                         </div>
+
+                                         <div className="flex justify-between items-center gap-2">
+                                           <div>
+                                             <label className="text-[9px] text-slate-400 block mb-0.5">Warna Sel</label>
+                                             <div className="flex gap-1 items-center">
+                                               {PRESET_COLORS.map(color => (
+                                                 <button
+                                                   key={color.value}
+                                                   type="button"
+                                                   onClick={() => updateTableCell(activeSection, sec.id, selectedCell.r, selectedCell.c, 'bgColor', color.value)}
+                                                   style={{ backgroundColor: color.value || '#fff' }}
+                                                   className={`h-4 w-4 rounded-full border ${cellObj.bgColor === color.value ? 'ring-2 ring-indigo-500 border-indigo-500' : 'border-slate-350'} shadow-sm`}
+                                                   title={color.name}
+                                                 />
+                                               ))}
+                                             </div>
+                                           </div>
+
+                                           <div className="text-right">
+                                             <label className="text-[9px] text-slate-400 block mb-0.5">Penggabungan</label>
+                                             <div className="flex gap-1">
+                                               <button
+                                                 type="button"
+                                                 disabled={!canMergeRight}
+                                                 onClick={() => mergeTableCellRight(activeSection, sec.id, selectedCell.r, selectedCell.c)}
+                                                 className="bg-indigo-600/10 hover:bg-indigo-650/20 text-indigo-500 dark:text-indigo-400 px-1.5 py-0.5 rounded font-bold text-[8.5px] disabled:opacity-40"
+                                                 title="Gabungkan dengan sel kanan"
+                                               >
+                                                 ➔ Kanan
+                                               </button>
+                                               <button
+                                                 type="button"
+                                                 disabled={!canMergeDown}
+                                                 onClick={() => mergeTableCellDown(activeSection, sec.id, selectedCell.r, selectedCell.c)}
+                                                 className="bg-indigo-600/10 hover:bg-indigo-650/20 text-indigo-500 dark:text-indigo-400 px-1.5 py-0.5 rounded font-bold text-[8.5px] disabled:opacity-40"
+                                                 title="Gabungkan dengan sel bawah"
+                                               >
+                                                 ⬇ Bawah
+                                               </button>
+                                               <button
+                                                 type="button"
+                                                 onClick={() => splitTableCell(activeSection, sec.id, selectedCell.r, selectedCell.c)}
+                                                 className="bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400 px-1.5 py-0.5 rounded font-bold text-[8.5px]"
+                                                 title="Pecah sel"
+                                               >
+                                                 Pecah
+                                               </button>
+                                             </div>
+                                           </div>
+                                         </div>
+
+                                         <div className="flex gap-2 justify-between pt-1 border-t border-slate-200 dark:border-slate-800">
+                                            <div className="flex gap-1">
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  deleteTableRowVisual(activeSection, sec.id, selectedCell.r);
+                                                  setSelectedCell(null);
+                                                }}
+                                                disabled={isHeader || normR.length <= 1}
+                                                className="bg-red-500/10 hover:bg-red-500/20 text-red-500 px-1.5 py-0.5 rounded text-[8.5px] disabled:opacity-45"
+                                              >
+                                                Hapus Baris
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  deleteTableColVisual(activeSection, sec.id, selectedCell.c);
+                                                  setSelectedCell(null);
+                                                }}
+                                                disabled={normH.length <= 1}
+                                                className="bg-red-500/10 hover:bg-red-500/20 text-red-500 px-1.5 py-0.5 rounded text-[8.5px] disabled:opacity-45"
+                                              >
+                                                Hapus Kolom
+                                              </button>
+                                            </div>
+
+                                            <div className="flex gap-1">
+                                              <button
+                                                type="button"
+                                                onClick={() => addTableRowVisual(activeSection, sec.id)}
+                                                className="bg-emerald-600/10 hover:bg-emerald-650/20 text-emerald-500 px-1.5 py-0.5 rounded font-bold text-[8.5px]"
+                                              >
+                                                + Baris
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => addTableColVisual(activeSection, sec.id)}
+                                                className="bg-emerald-600/10 hover:bg-emerald-650/20 text-emerald-500 px-1.5 py-0.5 rounded font-bold text-[8.5px]"
+                                              >
+                                                + Kolom
+                                              </button>
+                                            </div>
+                                         </div>
+                                       </div>
+                                     );
+                                   })()}
+                                 </div>
+                               ) : (
+                                 <div className="space-y-2">
+                                   <div className="p-2 bg-amber-500/5 border border-amber-500/10 rounded-lg text-[9px] text-amber-500 leading-snug">
+                                     Peringatan: Mengedit teks CSV langsung di bawah ini akan mengatur ulang (reset) semua merge span dan warna latar sel yang telah diatur sebelumnya.
+                                   </div>
+                                   <div className="grid grid-cols-2 gap-2">
+                                     <div>
+                                       <label className="text-[9px] text-slate-400 block mb-0.5">Letak Halaman</label>
+                                       <div className="w-full bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-350">
+                                         Halaman {getBlockPageNumber(activeSection, sec.id) || '(Membaca...)'}
+                                       </div>
+                                     </div>
+                                     <div>
+                                       <label className="text-[9px] text-slate-400 block mb-0.5">Header (Koma Pembatas)</label>
+                                       <input 
+                                         type="text" 
+                                         value={typeof sec.headers === 'string' ? sec.headers : normalizeHeaders(sec.headers).map(h => h.text).join(', ')} 
+                                         onChange={e => handleUpdateSectionField(activeSection, sec.id, 'headers', e.target.value)} 
+                                         className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs" 
+                                       />
+                                     </div>
+                                   </div>
+                                   <div>
+                                     <label className="text-[9px] text-slate-400 block mb-0.5">Baris Data (Koma/Newline Pembatas)</label>
+                                     <textarea 
+                                       value={sec.rowsText || ''} 
+                                       onChange={e => {
+                                         const val = e.target.value;
+                                         const parsedRows = val.split('\n').map(row => row.split(',').map(c => c.trim()));
+                                         setBabSections(prev => {
+                                           const updatedList = prev[activeSection].map(item => {
+                                             if (item.id === sec.id) {
+                                               return { ...item, rowsText: val, rows: parsedRows };
+                                             }
+                                             return item;
+                                           });
+                                           const updated = { ...prev, [activeSection]: updatedList };
+                                           saveLocalDraft({ babSections: updated });
+                                           return updated;
+                                         });
+                                       }} 
+                                       rows={4} 
+                                       className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg text-xs" 
+                                     />
+                                   </div>
+                                 </div>
+                               )}
+                             </div>
+                           ) : null}
+
+                              <div className="flex flex-wrap gap-2 mt-2 pt-1 border-t border-slate-150 dark:border-slate-800/60 no-print">
+                                <div className="relative">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setInsertMenu(prev => (prev.blockId === sec.id && prev.position === 'above' ? { blockId: null, position: null } : { blockId: sec.id, position: 'above' }));
+                                    }}
+                                    className="bg-indigo-600/10 hover:bg-indigo-650/20 text-indigo-500 dark:text-indigo-400 px-2 py-1 rounded-lg flex items-center gap-1 font-bold text-[9px]"
+                                  >
+                                    ➕ Di Atas (Above)
+                                  </button>
+                                  {insertMenu.blockId === sec.id && insertMenu.position === 'above' && (
+                                    <>
+                                      <div className="fixed inset-0 z-40" onClick={() => setInsertMenu({ blockId: null, position: null })} />
+                                      <div className="absolute bottom-full left-0 mb-1 z-50 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl py-1 min-w-[110px] flex flex-col">
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'sub-bab'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Sub-Bab
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'text'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Paragraf
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'table'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Tabel
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'figure'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Gambar
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'equation'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Rumus
+                                        </button>
+                                      </div>
+                                    </>
+                                  )}
                                 </div>
-                                <div>
-                                  <label className="text-[9px] text-slate-400 block mb-0.5">Header (Koma Pembatas)</label>
-                                  <input 
-                                    type="text" 
-                                    value={sec.headers || ''} 
-                                    onChange={e => handleUpdateSectionField(activeSection, sec.id, 'headers', e.target.value)} 
-                                    className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs" 
-                                  />
+
+                                <div className="relative">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setInsertMenu(prev => (prev.blockId === sec.id && prev.position === 'below' ? { blockId: null, position: null } : { blockId: sec.id, position: 'below' }));
+                                    }}
+                                    className="bg-indigo-600/10 hover:bg-indigo-650/20 text-indigo-500 dark:text-indigo-400 px-2 py-1 rounded-lg flex items-center gap-1 font-bold text-[9px]"
+                                  >
+                                    ➕ Di Bawah (Below)
+                                  </button>
+                                  {insertMenu.blockId === sec.id && insertMenu.position === 'below' && (
+                                    <>
+                                      <div className="fixed inset-0 z-40" onClick={() => setInsertMenu({ blockId: null, position: null })} />
+                                      <div className="absolute bottom-full left-0 mb-1 z-50 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl py-1 min-w-[110px] flex flex-col">
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'sub-bab'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Sub-Bab
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'text'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Paragraf
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'table'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Tabel
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'figure'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Gambar
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'equation'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Rumus
+                                        </button>
+                                      </div>
+                                    </>
+                                  )}
                                 </div>
-                              </div>
-                              <div>
-                                <label className="text-[9px] text-slate-400 block mb-0.5">Baris Data (Koma/Newline Pembatas)</label>
-                                <textarea 
-                                  value={sec.rowsText || ''} 
-                                  onChange={e => {
-                                    const val = e.target.value;
-                                    const parsedRows = val.split('\n').map(row => row.split(',').map(c => c.trim()));
-                                    setBabSections(prev => {
-                                      const updatedList = prev[activeSection].map(item => {
-                                        if (item.id === sec.id) {
-                                          return { ...item, rowsText: val, rows: parsedRows };
-                                        }
-                                        return item;
-                                      });
-                                      const updated = { ...prev, [activeSection]: updatedList };
-                                      saveLocalDraft({ babSections: updated });
-                                      return updated;
-                                    });
-                                  }} 
-                                  rows={4} 
-                                  className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg text-xs" 
-                                />
                               </div>
                             </div>
+
                           ) : sec.type === 'figure' ? (
                             <div className="space-y-2">
                               <div>
@@ -3958,68 +5800,297 @@ export default function Index() {
                                   </button>
                                 </div>
                               )}
+
+                              <div className="flex flex-wrap gap-2 mt-2 pt-1 border-t border-slate-150 dark:border-slate-800/60 no-print">
+                                <div className="relative">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setInsertMenu(prev => (prev.blockId === sec.id && prev.position === 'above' ? { blockId: null, position: null } : { blockId: sec.id, position: 'above' }));
+                                    }}
+                                    className="bg-indigo-600/10 hover:bg-indigo-650/20 text-indigo-500 dark:text-indigo-400 px-2 py-1 rounded-lg flex items-center gap-1 font-bold text-[9px]"
+                                  >
+                                    ➕ Di Atas (Above)
+                                  </button>
+                                  {insertMenu.blockId === sec.id && insertMenu.position === 'above' && (
+                                    <>
+                                      <div className="fixed inset-0 z-40" onClick={() => setInsertMenu({ blockId: null, position: null })} />
+                                      <div className="absolute bottom-full left-0 mb-1 z-50 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl py-1 min-w-[110px] flex flex-col">
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'sub-bab'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Sub-Bab
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'text'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Paragraf
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'table'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Tabel
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'figure'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Gambar
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'equation'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Rumus
+                                        </button>
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+
+                                <div className="relative">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setInsertMenu(prev => (prev.blockId === sec.id && prev.position === 'below' ? { blockId: null, position: null } : { blockId: sec.id, position: 'below' }));
+                                    }}
+                                    className="bg-indigo-600/10 hover:bg-indigo-650/20 text-indigo-500 dark:text-indigo-400 px-2 py-1 rounded-lg flex items-center gap-1 font-bold text-[9px]"
+                                  >
+                                    ➕ Di Bawah (Below)
+                                  </button>
+                                  {insertMenu.blockId === sec.id && insertMenu.position === 'below' && (
+                                    <>
+                                      <div className="fixed inset-0 z-40" onClick={() => setInsertMenu({ blockId: null, position: null })} />
+                                      <div className="absolute bottom-full left-0 mb-1 z-50 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl py-1 min-w-[110px] flex flex-col">
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'sub-bab'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Sub-Bab
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'text'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Paragraf
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'table'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Tabel
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'figure'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Gambar
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'equation'); setInsertMenu({ blockId: null, position: null }); }}
+                                          className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                        >
+                                          ➕ Rumus
+                                        </button>
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
                             </div>
-                          ) : (
-                            <>
-                              <div className="space-y-2">
+                          ) : sec.type === 'equation' ? (
+                            <div className="space-y-2">
+                              <div>
+                                <label className="text-[9px] text-slate-400 block mb-0.5">Judul/Nama Rumus (Caption)</label>
+                                <input 
+                                  type="text" 
+                                  value={sec.title} 
+                                  onChange={e => handleUpdateSectionField(activeSection, sec.id, 'title', e.target.value)} 
+                                  className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs font-bold" 
+                                />
+                              </div>
+                              <div className="grid grid-cols-2 gap-2">
                                 <div>
-                                  <label className="text-[9px] text-slate-400 block mb-0.5">Judul Sub-Bab (Caption)</label>
+                                  <label className="text-[9px] text-slate-400 block mb-0.5">Rumus / Persamaan</label>
                                   <input 
                                     type="text" 
-                                    value={sec.title} 
-                                    onChange={e => handleUpdateSectionField(activeSection, sec.id, 'title', e.target.value)} 
-                                    className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs" 
+                                    value={sec.content} 
+                                    onChange={e => handleUpdateSectionField(activeSection, sec.id, 'content', e.target.value)} 
+                                    placeholder="Contoh: y = a + bx"
+                                    className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs font-mono" 
                                   />
                                 </div>
-                                
-                                <div className="grid grid-cols-2 gap-2">
-                                  <div>
-                                    <label className="text-[9px] text-slate-400 block mb-0.5">Heading</label>
-                                    <select 
-                                      value={sec.headingLevel} 
-                                      onChange={e => {
-                                        const level = parseInt(e.target.value);
-                                        handleUpdateSectionField(activeSection, sec.id, 'headingLevel', level);
-                                        if (level === 2) {
-                                          handleUpdateSectionField(activeSection, sec.id, 'numberingStyle', 'bab_prefix_dot');
-                                        } else if (level === 3) {
-                                          handleUpdateSectionField(activeSection, sec.id, 'numberingStyle', 'bab_prefix_double_dot');
-                                        }
-                                      }} 
-                                      className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
-                                    >
-                                      <option value={0}>Isi Saja</option>
-                                      <option value={2}>Heading 2</option>
-                                      <option value={3}>Heading 3</option>
-                                      <option value={4}>Heading 4</option>
-                                      <option value={5}>Heading 5</option>
-                                      <option value={6}>Heading 6</option>
-                                    </select>
-                                  </div>
-
-                                  <div>
-                                    <label className="text-[9px] text-slate-400 block mb-0.5">Penomoran</label>
-                                    <select 
-                                      value={sec.numberingStyle || 'none'} 
-                                      onChange={e => handleUpdateSectionField(activeSection, sec.id, 'numberingStyle', e.target.value)} 
-                                      className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
-                                    >
-                                      <option value="none">Tanpa Nomor</option>
-                                      <option value="bab_prefix_dot">1.1 (Sesuai Bab)</option>
-                                      <option value="bab_prefix_double_dot">1.1.1 (Suku Bab)</option>
-                                      <option value="arabic_dot">1. 2. 3.</option>
-                                      <option value="arabic_paren">1) 2) 3)</option>
-                                      <option value="arabic_both_paren">(1) (2) (3)</option>
-                                      <option value="alpha_dot_lower">a. b. c.</option>
-                                      <option value="alpha_dot_upper">A. B. C.</option>
-                                      <option value="alpha_paren_lower">a) b) c)</option>
-                                      <option value="alpha_both_paren_lower">(a) (b) (c)</option>
-                                      <option value="roman_dot_upper">I. II. III.</option>
-                                      <option value="roman_dot_lower">i. ii. iii.</option>
-                                    </select>
+                                <div>
+                                  <label className="text-[9px] text-slate-400 block mb-0.5">Letak Halaman</label>
+                                  <div className="w-full bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-350">
+                                    Halaman {getBlockPageNumber(activeSection, sec.id) || '(Membaca...)'}
                                   </div>
                                 </div>
                               </div>
+                              <div>
+                                <label className="text-[9px] text-slate-400 block mb-0.5">Keterangan Variabel (Satu per Baris)</label>
+                                <textarea 
+                                  value={sec.description || ''} 
+                                  onChange={e => handleUpdateSectionField(activeSection, sec.id, 'description', e.target.value)} 
+                                  placeholder="Contoh:&#10;y = Variabel Dependen&#10;a = Konstanta"
+                                  rows={4} 
+                                  className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg text-xs italic" 
+                                />
+                              </div>
+
+                              <div className="flex flex-wrap gap-2 mt-2 pt-1 border-t border-slate-150 dark:border-slate-800/60 no-print">
+                                <div className="relative">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setInsertMenu(prev => (prev.blockId === sec.id && prev.position === 'above' ? { blockId: null, position: null } : { blockId: sec.id, position: 'above' }));
+                                    }}
+                                    className="bg-indigo-600/10 hover:bg-indigo-650/20 text-indigo-500 dark:text-indigo-400 px-2 py-1 rounded-lg flex items-center gap-1 font-bold text-[9px]"
+                                  >
+                                    ➕ Di Atas (Above)
+                                  </button>
+                                  {insertMenu.blockId === sec.id && insertMenu.position === 'above' && (
+                                    <>
+                                      <div className="fixed inset-0 z-40" onClick={() => setInsertMenu({ blockId: null, position: null })} />
+                                      <div className="absolute bottom-full left-0 mb-1 z-50 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl py-1 min-w-[110px] flex flex-col">
+                                        <button type="button" onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'sub-bab'); setInsertMenu({ blockId: null, position: null }); }} className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1">➕ Sub-Bab</button>
+                                        <button type="button" onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'text'); setInsertMenu({ blockId: null, position: null }); }} className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1">➕ Paragraf</button>
+                                        <button type="button" onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'table'); setInsertMenu({ blockId: null, position: null }); }} className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1">➕ Tabel</button>
+                                        <button type="button" onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'figure'); setInsertMenu({ blockId: null, position: null }); }} className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1">➕ Gambar</button>
+                                        <button type="button" onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'equation'); setInsertMenu({ blockId: null, position: null }); }} className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1">➕ Rumus</button>
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+
+                                <div className="relative">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setInsertMenu(prev => (prev.blockId === sec.id && prev.position === 'below' ? { blockId: null, position: null } : { blockId: sec.id, position: 'below' }));
+                                    }}
+                                    className="bg-indigo-600/10 hover:bg-indigo-650/20 text-indigo-500 dark:text-indigo-400 px-2 py-1 rounded-lg flex items-center gap-1 font-bold text-[9px]"
+                                  >
+                                    ➕ Di Bawah (Below)
+                                  </button>
+                                  {insertMenu.blockId === sec.id && insertMenu.position === 'below' && (
+                                    <>
+                                      <div className="fixed inset-0 z-40" onClick={() => setInsertMenu({ blockId: null, position: null })} />
+                                      <div className="absolute bottom-full left-0 mb-1 z-50 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl py-1 min-w-[110px] flex flex-col">
+                                        <button type="button" onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'sub-bab'); setInsertMenu({ blockId: null, position: null }); }} className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1">➕ Sub-Bab</button>
+                                        <button type="button" onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'text'); setInsertMenu({ blockId: null, position: null }); }} className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1">➕ Paragraf</button>
+                                        <button type="button" onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'table'); setInsertMenu({ blockId: null, position: null }); }} className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1">➕ Tabel</button>
+                                        <button type="button" onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'figure'); setInsertMenu({ blockId: null, position: null }); }} className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1">➕ Gambar</button>
+                                        <button type="button" onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'equation'); setInsertMenu({ blockId: null, position: null }); }} className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1">➕ Rumus</button>
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                               <div className="space-y-2">
+                                 <div className="grid grid-cols-2 gap-2">
+                                   <div>
+                                     <label className="text-[9px] text-slate-400 block mb-0.5">Format Teks / Heading</label>
+                                     <select 
+                                       value={sec.headingLevel} 
+                                       onChange={e => {
+                                         const level = parseInt(e.target.value);
+                                         handleUpdateSectionField(activeSection, sec.id, 'headingLevel', level);
+                                         if (level === 2) {
+                                           handleUpdateSectionField(activeSection, sec.id, 'numberingStyle', 'bab_prefix_dot');
+                                         } else if (level === 3) {
+                                           handleUpdateSectionField(activeSection, sec.id, 'numberingStyle', 'bab_prefix_double_dot');
+                                         } else if (level === 0) {
+                                           handleUpdateSectionField(activeSection, sec.id, 'numberingStyle', 'none');
+                                         }
+                                       }} 
+                                       className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-200"
+                                     >
+                                       <option value={0}>Isi Saja (Paragraf Konten)</option>
+                                       <option value={2}>Heading 2 (Sub-Bab 1.1)</option>
+                                       <option value={3}>Heading 3 (Sub-Bab 1.1.1)</option>
+                                       <option value={4}>Heading 4 (Sub-Bab 1.1.1.1)</option>
+                                       <option value={5}>Heading 5</option>
+                                       <option value={6}>Heading 6</option>
+                                     </select>
+                                   </div>
+
+                                   {sec.headingLevel > 0 && (
+                                     <div>
+                                       <label className="text-[9px] text-slate-400 block mb-0.5">Penomoran</label>
+                                       <select 
+                                         value={sec.numberingStyle || 'none'} 
+                                         onChange={e => handleUpdateSectionField(activeSection, sec.id, 'numberingStyle', e.target.value)} 
+                                         className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
+                                       >
+                                         <option value="none">Tanpa Nomor</option>
+                                         <option value="bab_prefix_dot">1.1 (Sesuai Bab)</option>
+                                         <option value="bab_prefix_double_dot">1.1.1 (Suku Bab)</option>
+                                         <option value="arabic_dot">1. 2. 3.</option>
+                                         <option value="arabic_paren">1) 2) 3)</option>
+                                         <option value="arabic_both_paren">(1) (2) (3)</option>
+                                         <option value="alpha_dot_lower">a. b. c.</option>
+                                         <option value="alpha_dot_upper">A. B. C.</option>
+                                         <option value="alpha_paren_lower">a) b) c)</option>
+                                         <option value="alpha_both_paren_lower">(a) (b) (c)</option>
+                                         <option value="roman_dot_upper">I. II. III.</option>
+                                         <option value="roman_dot_lower">i. ii. iii.</option>
+                                       </select>
+                                     </div>
+                                   )}
+                                 </div>
+                                 
+                                 {sec.headingLevel > 0 && (
+                                   <div>
+                                     <label className="text-[9px] text-slate-400 block mb-0.5">Judul Sub-Bab (Caption)</label>
+                                     <input 
+                                       type="text" 
+                                       value={sec.title} 
+                                       onChange={e => handleUpdateSectionField(activeSection, sec.id, 'title', e.target.value)} 
+                                       className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs" 
+                                     />
+                                   </div>
+                                 )}
+                               </div>
+
+                              {legacySectionKeyMapping[sec.id] === 'latar_belakang' && (
+                                <div className="space-y-1 mb-2 bg-indigo-50/5 dark:bg-indigo-950/10 p-2 border border-indigo-500/10 dark:border-indigo-500/20 rounded-lg">
+                                  <label className="text-[9px] text-indigo-400 block font-bold uppercase tracking-wider">Format Latar Belakang AI</label>
+                                  <select
+                                    value={backgroundStyle}
+                                    onChange={e => setBackgroundStyle(e.target.value)}
+                                    className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs font-bold text-indigo-500"
+                                  >
+                                    <option value="structured">✨ Tulis dengan Komentar (Terstruktur)</option>
+                                    <option value="direct">📝 Tulis Langsung (Tanpa Komentar)</option>
+                                  </select>
+                                  <div className="text-[8.5px] text-slate-400 leading-snug">
+                                    {backgroundStyle === 'structured' 
+                                      ? "Terstruktur 4 alinea: Alinea 1 Teori/Konsep + Pustaka, Alinea 2 Masalah (Apa, Mengapa, Siapa), Alinea 3 Solusi, Alinea 4 Sasaran Judul. Min 3 kalimat/alinea."
+                                      : "Menulis draf latar belakang akademik mengalir bebas secara langsung tanpa tag komentar panduan."}
+                                  </div>
+                                </div>
+                              )}
 
                               <div className="grid grid-cols-3 gap-2 items-center">
                                 <div className="col-span-2">
@@ -4035,13 +6106,201 @@ export default function Index() {
                               </div>
 
                               <div>
-                                <label className="text-[9px] text-slate-400 block mb-0.5">Isi Konten</label>
+                                <div className="flex justify-between items-center mb-0.5">
+                                  <label className="text-[9px] text-slate-400 block">Isi Konten</label>
+                                  <div className="flex gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const textarea = document.getElementById(`textarea-content-${sec.id}`);
+                                        let newContent = sec.content || '';
+                                        if (textarea) {
+                                          const start = textarea.selectionStart;
+                                          const end = textarea.selectionEnd;
+                                          newContent = newContent.substring(0, start) + "\n[pagebreak]\n" + newContent.substring(end);
+                                          handleUpdateSectionField(activeSection, sec.id, 'content', newContent);
+                                          setTimeout(() => {
+                                            textarea.focus();
+                                            textarea.setSelectionRange(start + 13, start + 13);
+                                          }, 50);
+                                        } else {
+                                          handleUpdateSectionField(activeSection, sec.id, 'content', newContent + "\n[pagebreak]\n");
+                                        }
+                                        showToast("Penanda Halaman Baru dimasukkan.");
+                                      }}
+                                      className="text-[9px] text-indigo-500 hover:text-indigo-600 dark:text-indigo-400 dark:hover:text-indigo-300 font-bold flex items-center gap-0.5 transition-colors"
+                                      title="Memaksa konten setelah baris ini mulai di halaman baru"
+                                    >
+                                      📄 Halaman Baru
+                                    </button>
+                                    {sec.content && (sec.content.includes('\n') || sec.content.includes('\r')) && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const cleaned = cleanLineBreaks(sec.content);
+                                          handleUpdateSectionField(activeSection, sec.id, 'content', cleaned);
+                                          showToast("Paragraf berhasil dirapikan!");
+                                        }}
+                                        className="text-[9px] text-indigo-500 hover:text-indigo-600 dark:text-indigo-400 dark:hover:text-indigo-300 font-bold flex items-center gap-0.5 transition-colors"
+                                        title="Menggabungkan baris yang terputus akibat copy-paste dari PDF/Word"
+                                      >
+                                        ✨ Rapikan Baris/Spasi (PDF)
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
                                 <textarea 
+                                  id={`textarea-content-${sec.id}`}
                                   value={sec.content} 
                                   onChange={e => handleUpdateSectionField(activeSection, sec.id, 'content', e.target.value)} 
+                                  onPaste={(e) => {
+                                    const pastedText = e.clipboardData.getData('text');
+                                    if (pastedText && (pastedText.includes('\n') || pastedText.includes('\r'))) {
+                                      setTimeout(() => {
+                                        showToast("Tips: Klik tombol '✨ Rapikan Baris/Spasi (PDF)' di atas untuk merapikan teks.");
+                                      }, 500);
+                                    }
+                                  }}
                                   rows={5} 
                                   className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg text-xs" 
                                 />
+
+                                <div className="flex flex-wrap gap-2 mt-1.5 no-print">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSplitTextAndInsert(activeSection, sec.id, 'figure')}
+                                    className="bg-sky-600/10 hover:bg-sky-650/20 text-sky-500 dark:text-sky-400 px-2 py-1 rounded-lg flex items-center gap-1 font-bold text-[9px]"
+                                    title="Pecah paragraf di kursor dan sisipkan gambar baru"
+                                  >
+                                    🖼️ Sisipkan Gambar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSplitTextAndInsert(activeSection, sec.id, 'table')}
+                                    className="bg-sky-600/10 hover:bg-sky-650/20 text-sky-500 dark:text-sky-400 px-2 py-1 rounded-lg flex items-center gap-1 font-bold text-[9px]"
+                                    title="Pecah paragraf di kursor dan sisipkan tabel baru"
+                                  >
+                                    📊 Sisipkan Tabel
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSplitTextAndInsert(activeSection, sec.id, 'split')}
+                                    className="bg-teal-600/10 hover:bg-teal-650/20 text-teal-500 dark:text-teal-400 px-2 py-1 rounded-lg flex items-center gap-1 font-bold text-[9px]"
+                                    title="Pecah paragraf di kursor menjadi dua bagian"
+                                  >
+                                    ✂️ Pecah Paragraf
+                                  </button>
+
+                                  <div className="relative">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setInsertMenu(prev => (prev.blockId === sec.id && prev.position === 'above' ? { blockId: null, position: null } : { blockId: sec.id, position: 'above' }));
+                                      }}
+                                      className="bg-indigo-600/10 hover:bg-indigo-650/20 text-indigo-500 dark:text-indigo-400 px-2 py-1 rounded-lg flex items-center gap-1 font-bold text-[9px]"
+                                    >
+                                      ➕ Di Atas (Above)
+                                    </button>
+                                    {insertMenu.blockId === sec.id && insertMenu.position === 'above' && (
+                                      <>
+                                        <div className="fixed inset-0 z-40" onClick={() => setInsertMenu({ blockId: null, position: null })} />
+                                        <div className="absolute bottom-full left-0 mb-1 z-50 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl py-1 min-w-[110px] flex flex-col">
+                                          <button
+                                            type="button"
+                                            onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'sub-bab'); setInsertMenu({ blockId: null, position: null }); }}
+                                            className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                          >
+                                            ➕ Sub-Bab
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'text'); setInsertMenu({ blockId: null, position: null }); }}
+                                            className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                          >
+                                            ➕ Paragraf
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'table'); setInsertMenu({ blockId: null, position: null }); }}
+                                            className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                          >
+                                            ➕ Tabel
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'figure'); setInsertMenu({ blockId: null, position: null }); }}
+                                            className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                          >
+                                            ➕ Gambar
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => { handleInsertSection(activeSection, sec.id, 'above', 'equation'); setInsertMenu({ blockId: null, position: null }); }}
+                                            className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                          >
+                                            ➕ Rumus
+                                          </button>
+                                        </div>
+                                      </>
+                                    )}
+                                  </div>
+
+                                  <div className="relative">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setInsertMenu(prev => (prev.blockId === sec.id && prev.position === 'below' ? { blockId: null, position: null } : { blockId: sec.id, position: 'below' }));
+                                      }}
+                                      className="bg-indigo-600/10 hover:bg-indigo-650/20 text-indigo-500 dark:text-indigo-400 px-2 py-1 rounded-lg flex items-center gap-1 font-bold text-[9px]"
+                                    >
+                                      ➕ Di Bawah (Below)
+                                    </button>
+                                    {insertMenu.blockId === sec.id && insertMenu.position === 'below' && (
+                                      <>
+                                        <div className="fixed inset-0 z-40" onClick={() => setInsertMenu({ blockId: null, position: null })} />
+                                        <div className="absolute bottom-full left-0 mb-1 z-50 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl py-1 min-w-[110px] flex flex-col">
+                                          <button
+                                            type="button"
+                                            onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'sub-bab'); setInsertMenu({ blockId: null, position: null }); }}
+                                            className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                          >
+                                            ➕ Sub-Bab
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'text'); setInsertMenu({ blockId: null, position: null }); }}
+                                            className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                          >
+                                            ➕ Paragraf
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'table'); setInsertMenu({ blockId: null, position: null }); }}
+                                            className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                          >
+                                            ➕ Tabel
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'figure'); setInsertMenu({ blockId: null, position: null }); }}
+                                            className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                          >
+                                            ➕ Gambar
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'equation'); setInsertMenu({ blockId: null, position: null }); }}
+                                            className="text-left px-3 py-1.5 text-[9px] font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1"
+                                          >
+                                            ➕ Rumus
+                                          </button>
+                                        </div>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
                               </div>
                             </>
                           )}
@@ -4065,9 +6324,9 @@ export default function Index() {
                         <div>
                           <label className="text-[9px] text-slate-400 block mb-0.5">Letak Bab</label>
                           <select value={tableInput.bab} onChange={e=>setTableInput(p=>({...p, bab:e.target.value}))} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs">
-                            <option value="bab1">BAB I</option>
-                            <option value="bab3">BAB III</option>
-                            <option value="bab4">BAB IV</option>
+                            <option value="bab1">{babTitles.bab1.prefix}</option>
+                            <option value="bab3">{babTitles.bab3.prefix}</option>
+                            <option value="bab4">{babTitles.bab4.prefix}</option>
                           </select>
                         </div>
                         <div>
@@ -4092,9 +6351,9 @@ export default function Index() {
                       <div>
                         <label className="text-[9px] text-slate-400 block mb-0.5">Letak Bab</label>
                         <select value={figureInput.bab} onChange={e=>setFigureInput(p=>({...p, bab:e.target.value}))} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs">
-                          <option value="bab1">BAB I</option>
-                          <option value="bab3">BAB III</option>
-                          <option value="bab4">BAB IV</option>
+                          <option value="bab1">{babTitles.bab1.prefix}</option>
+                          <option value="bab3">{babTitles.bab3.prefix}</option>
+                          <option value="bab4">{babTitles.bab4.prefix}</option>
                         </select>
                       </div>
                       <button onClick={handleAddFigure} className="w-full bg-indigo-600 hover:bg-indigo-700 py-1.5 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1"><Plus className="h-4 w-4" /> Tambah Gambar</button>
@@ -4124,9 +6383,9 @@ export default function Index() {
                                     onChange={e => setEditingElementData(p => ({ ...p, bab: e.target.value }))}
                                     className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
                                   >
-                                    <option value="bab1">BAB I</option>
-                                    <option value="bab3">BAB III</option>
-                                    <option value="bab4">BAB IV</option>
+                                    <option value="bab1">{babTitles.bab1.prefix}</option>
+                                    <option value="bab3">{babTitles.bab3.prefix}</option>
+                                    <option value="bab4">{babTitles.bab4.prefix}</option>
                                   </select>
                                 </div>
                                 <div>
@@ -4202,9 +6461,9 @@ export default function Index() {
                                   onChange={e => setEditingElementData(p => ({ ...p, bab: e.target.value }))}
                                   className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
                                 >
-                                  <option value="bab1">BAB I</option>
-                                  <option value="bab3">BAB III</option>
-                                  <option value="bab4">BAB IV</option>
+                                  <option value="bab1">{babTitles.bab1.prefix}</option>
+                                  <option value="bab3">{babTitles.bab3.prefix}</option>
+                                  <option value="bab4">{babTitles.bab4.prefix}</option>
                                 </select>
                               </div>
                               <div className="flex gap-2 justify-end">
@@ -4275,17 +6534,39 @@ export default function Index() {
                 {/* Scholar & ResearchGate Search Panel */}
                 <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
                   <h3 className="font-bold text-slate-400 uppercase text-[10px] flex items-center gap-1"><Search className="h-3.5 w-3.5 text-indigo-500" /> Cari di Google Scholar / ResearchGate</h3>
-                  <form onSubmit={handleScholarSearch} className="flex gap-2">
-                    <input 
-                      type="text" 
-                      value={scholarQuery} 
-                      onChange={e=>setScholarQuery(e.target.value)} 
-                      placeholder="Kata kunci: Sugiyono 2018 / DeLone McLean" 
-                      className="flex-1 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-1.5 text-xs" 
-                    />
-                    <button type="submit" disabled={searchingScholar} className="bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg disabled:opacity-50">
-                      {searchingScholar ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-                    </button>
+                  <form onSubmit={handleScholarSearch} className="space-y-2">
+                    <div className="flex gap-2">
+                      <input 
+                        type="text" 
+                        value={scholarQuery} 
+                        onChange={e=>setScholarQuery(e.target.value)} 
+                        placeholder="Kata kunci: Sugiyono 2018 / DeLone McLean" 
+                        className="flex-1 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-1.5 text-xs text-slate-800 dark:text-slate-100" 
+                      />
+                      <button type="submit" disabled={searchingScholar} className="bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg disabled:opacity-50">
+                        {searchingScholar ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <div className="flex gap-2 items-center text-[10px] text-slate-500 dark:text-slate-400">
+                      <span className="shrink-0 font-bold">Rentang Tahun:</span>
+                      <input 
+                        type="number" 
+                        min="1950" 
+                        max="2030" 
+                        value={scholarYearStart} 
+                        onChange={e=>setScholarYearStart(parseInt(e.target.value) || new Date().getFullYear() - 10)} 
+                        className="w-16 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded p-1 text-center text-xs text-slate-850 dark:text-slate-250 font-bold" 
+                      />
+                      <span>s/d</span>
+                      <input 
+                        type="number" 
+                        min="1950" 
+                        max="2030" 
+                        value={scholarYearEnd} 
+                        onChange={e=>setScholarYearEnd(parseInt(e.target.value) || new Date().getFullYear())} 
+                        className="w-16 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded p-1 text-center text-xs text-slate-850 dark:text-slate-250 font-bold" 
+                      />
+                    </div>
                   </form>
 
                   {/* Scholar AI Search Results */}
@@ -4295,7 +6576,19 @@ export default function Index() {
                         <div key={i} className="p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg flex flex-col gap-1 text-[10px]">
                           <div className="flex justify-between items-center mb-1">
                             <span className="bg-indigo-500/10 text-indigo-400 px-1 py-0.5 rounded text-[8px] font-bold uppercase">{cit.source}</span>
-                            <button onClick={()=>importCitation(cit)} className="text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-0.5"><Plus className="h-3 w-3" /> Tambah</button>
+                            <div className="flex gap-1.5 items-center">
+                              {cit.url && (
+                                <a 
+                                  href={cit.url} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer" 
+                                  className="text-indigo-500 dark:text-indigo-400 hover:text-indigo-650 dark:hover:text-indigo-300 font-semibold flex items-center gap-0.5 text-[8.5px] border border-indigo-500/20 px-1.5 py-0.5 rounded bg-indigo-500/5 hover:bg-indigo-500/10"
+                                >
+                                  <ExternalLink className="h-2.5 w-2.5" /> PDF
+                                </a>
+                              )}
+                              <button onClick={()=>importCitation(cit)} className="text-indigo-500 dark:text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300 font-bold flex items-center gap-0.5 text-[9px]"><Plus className="h-3 w-3" /> Tambah</button>
+                            </div>
                           </div>
                           <div className="font-semibold">"{cit.title}"</div>
                           <div className="text-slate-400">{cit.author} ({cit.year}) • {cit.publisher}</div>
@@ -4392,8 +6685,204 @@ export default function Index() {
             </div>
           </div>
 
+          {/* Active Editing Formatting Toolbar */}
+          {inlineEditingBlockId && inlineEditingBabKey && (() => {
+            const sec = babSections[inlineEditingBabKey]?.find(x => x.id === inlineEditingBlockId);
+            if (!sec) return null;
+            
+            const activeIndex = babSections[inlineEditingBabKey]?.findIndex(x => x.id === inlineEditingBlockId);
+            const isFirst = activeIndex === 0;
+            const isLast = activeIndex === (babSections[inlineEditingBabKey]?.length - 1);
+            const legacyKey = legacySectionKeyMapping[sec.id];
+            const displayTitle = sec.title || 'Sub-Bab';
+            const isGenerating = generatingSection === sec.id;
+            
+            return (
+              <div 
+                className="sticky top-14 mb-4 bg-slate-900/90 dark:bg-slate-950/95 border border-slate-700/80 backdrop-blur-md px-4 py-2 rounded-full flex flex-wrap items-center gap-3 text-slate-100 shadow-xl no-print z-30 animate-in fade-in slide-in-from-top-2 duration-200 inline-editor-toolbar"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider shrink-0 mr-1">Teks:</span>
+                  <select
+                    value={sec.headingLevel}
+                    onChange={e => {
+                      const level = parseInt(e.target.value);
+                      handleUpdateSectionField(inlineEditingBabKey, sec.id, 'headingLevel', level);
+                      if (level === 2) {
+                        handleUpdateSectionField(inlineEditingBabKey, sec.id, 'numberingStyle', 'bab_prefix_dot');
+                      } else if (level === 3) {
+                        handleUpdateSectionField(inlineEditingBabKey, sec.id, 'numberingStyle', 'bab_prefix_double_dot');
+                      }
+                    }}
+                    className="bg-slate-800 dark:bg-slate-900 border border-slate-700 py-1 px-2 rounded text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-bold cursor-pointer"
+                  >
+                    <option value={0}>Paragraf Biasa</option>
+                    <option value={2}>Heading 2 (Sub-Bab)</option>
+                    <option value={3}>Heading 3 (Suku Bab)</option>
+                    <option value={4}>Heading 4 (Sub Heading 4)</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider shrink-0 mr-1">Nomor:</span>
+                  <select
+                    value={sec.numberingStyle || 'none'}
+                    onChange={e => handleUpdateSectionField(inlineEditingBabKey, sec.id, 'numberingStyle', e.target.value)}
+                    className="bg-slate-800 dark:bg-slate-900 border border-slate-700 py-1 px-2 rounded text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-bold cursor-pointer"
+                  >
+                    <option value="none">Tanpa Nomor</option>
+                    <option value="bab_prefix_dot">1.1 (Sesuai Bab)</option>
+                    <option value="bab_prefix_double_dot">1.1.1 (Suku Bab)</option>
+                    <option value="arabic_dot">1. 2. 3.</option>
+                    <option value="arabic_paren">1) 2) 3)</option>
+                    <option value="alpha_dot_lower">a. b. c.</option>
+                  </select>
+                </div>
+
+                <div className="h-5 w-[1px] bg-slate-700/80 mx-1"></div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const textarea = document.getElementById(`inline-textarea-${sec.id}`);
+                      let newContent = sec.content || '';
+                      if (textarea) {
+                        const start = textarea.selectionStart;
+                        const end = textarea.selectionEnd;
+                        newContent = newContent.substring(0, start) + "\n[pagebreak]\n" + newContent.substring(end);
+                        handleUpdateSectionField(inlineEditingBabKey, sec.id, 'content', newContent);
+                        setTimeout(() => {
+                          textarea.focus();
+                          textarea.setSelectionRange(start + 13, start + 13);
+                        }, 50);
+                      } else {
+                        handleUpdateSectionField(inlineEditingBabKey, sec.id, 'content', newContent + "\n[pagebreak]\n");
+                      }
+                    }}
+                    className="hover:bg-slate-800 p-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 text-indigo-400 hover:text-indigo-300 transition-colors"
+                    title="Buat halaman baru dari titik cursor"
+                  >
+                    📄 Halaman Baru
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const cleaned = cleanLineBreaks(sec.content);
+                      handleUpdateSectionField(inlineEditingBabKey, sec.id, 'content', cleaned);
+                      showToast("Paragraf berhasil dirapikan!");
+                    }}
+                    className="hover:bg-slate-800 p-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 text-emerald-400 hover:text-emerald-350 transition-colors"
+                    title="Menghapus spasi dan enter berlebih (akibat copy-paste PDF)"
+                  >
+                    ✨ Rapikan Spasi
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={!!generatingSection}
+                    onClick={() => triggerAIGenerateFlow({ babKey: inlineEditingBabKey, id: sec.id, displayTitle, legacyKey })}
+                    className="hover:bg-slate-800 p-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 text-amber-400 hover:text-amber-350 transition-colors disabled:opacity-40"
+                    title="Tulis otomatis isi konten menggunakan AI"
+                  >
+                    {isGenerating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                    AI Tulis
+                  </button>
+
+                  {sec.type === 'text' && (
+                    <>
+                      <div className="h-4 w-[1px] bg-slate-800 mx-1 inline-block"></div>
+                      <button
+                        type="button"
+                        onClick={() => handleSplitTextAndInsert(inlineEditingBabKey, sec.id, 'figure')}
+                        className="hover:bg-slate-800 p-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 text-sky-400 hover:text-sky-350 transition-colors"
+                        title="Pecah paragraf di kursor dan sisipkan gambar"
+                      >
+                        🖼️ Gambar (Kursor)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSplitTextAndInsert(inlineEditingBabKey, sec.id, 'table')}
+                        className="hover:bg-slate-800 p-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 text-sky-400 hover:text-sky-350 transition-colors"
+                        title="Pecah paragraf di kursor dan sisipkan tabel"
+                      >
+                        📊 Tabel (Kursor)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSplitTextAndInsert(inlineEditingBabKey, sec.id, 'split')}
+                        className="hover:bg-slate-800 p-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 text-teal-400 hover:text-teal-350 transition-colors"
+                        title="Pecah paragraf menjadi dua di kursor"
+                      >
+                        ✂️ Pecah
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                <div className="h-5 w-[1px] bg-slate-700/80 mx-1"></div>
+
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    disabled={isFirst}
+                    onClick={() => handleMoveSection(inlineEditingBabKey, activeIndex, -1)}
+                    className="p-1 px-2.5 text-[11px] hover:bg-slate-850 rounded text-slate-300 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent"
+                    title="Naikkan posisi blok ini"
+                  >
+                    Naik ↑
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isLast}
+                    onClick={() => handleMoveSection(inlineEditingBabKey, activeIndex, 1)}
+                    className="p-1 px-2.5 text-[11px] hover:bg-slate-850 rounded text-slate-300 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent"
+                    title="Turunkan posisi blok ini"
+                  >
+                    Turun ↓
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (confirm("Hapus blok konten ini?")) {
+                        setInlineEditingBlockId(null);
+                        setInlineEditingBabKey(null);
+                        setBabSections(prev => {
+                          const updatedList = prev[inlineEditingBabKey].filter(x => x.id !== sec.id);
+                          const updated = { ...prev, [inlineEditingBabKey]: updatedList };
+                          saveLocalDraft({ babSections: updated });
+                          return updated;
+                        });
+                        showToast("Blok konten berhasil dihapus.");
+                      }
+                    }}
+                    className="p-1 px-2.5 text-[11px] hover:bg-slate-850 rounded text-red-400 hover:text-red-350 transition-colors"
+                    title="Hapus blok konten ini"
+                  >
+                    Hapus 🗑️
+                  </button>
+                </div>
+
+                <div className="h-5 w-[1px] bg-slate-700/80 mx-1"></div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInlineEditingBlockId(null);
+                    setInlineEditingBabKey(null);
+                  }}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1 px-3.5 rounded-full text-[11px] transition-colors shadow-md shadow-indigo-600/10"
+                >
+                  Selesai
+                </button>
+              </div>
+            );
+          })()}
+
           {/* Scale transformer for preview paper */}
-          <div className="flex flex-col items-center origin-top transition-transform duration-200" style={{ transform: `scale(${zoomLevel / 100})` }}>
+          <div className="flex flex-col items-center origin-top transition-transform duration-200" style={{ transform: `scale(${zoomLevel / 100})` }} onClick={handlePreviewBackgroundClick}>
             <div 
               className="flex flex-col gap-8 pb-32"
               style={{
@@ -4750,7 +7239,7 @@ export default function Index() {
                   
                   <div className="flex flex-col gap-2 text-[12pt] flex-1">
                     {Array.isArray(tables) && tables.map((t) => {
-                      const babPage = getPageForBab(t.bab);
+                      const babPage = getPageForBlock(t.bab, t.id);
                       return (
                         <div key={t.id} className="flex items-baseline justify-between">
                           <div className="flex items-baseline flex-1 mr-2 overflow-hidden">
@@ -4773,7 +7262,7 @@ export default function Index() {
                   
                   <div className="flex flex-col gap-2 text-[12pt] flex-1">
                     {Array.isArray(figures) && figures.map((f) => {
-                      const babPage = getPageForFigure(f.bab);
+                      const babPage = getPageForBlock(f.bab, f.id);
                       return (
                         <div key={f.id} className="flex items-baseline justify-between">
                           <div className="flex items-baseline flex-1 mr-2 overflow-hidden">
@@ -4788,6 +7277,40 @@ export default function Index() {
                 </div>
                 <div className={getPageNumberClass('daftar-gambar')}>{getPageNumber('daftar-gambar')}</div>
               </div>
+
+              {/* PAGE 5: DAFTAR RUMUS */}
+              {layout.showDaftarRumus && (
+                <div className={`a4-page relative ${getPagePrintClass('daftar-rumus')}`} id="page-daftar-rumus">
+                  <div className="page-content border border-dashed border-indigo-500/10 flex flex-col">
+                    <h1 className="text-[14pt] font-bold text-center uppercase mb-8">DAFTAR RUMUS</h1>
+                    
+                    <div className="flex flex-col gap-2 text-[12pt] flex-1">
+                      {Array.isArray(equations) && equations.map((eq) => {
+                        const babPage = getPageForBlock(eq.bab, eq.id);
+                        // Resolve equation prefix, e.g. "Rumus 3.1"
+                        const resolvedEqPrefix = (() => {
+                          const babMatch = eq.bab.match(/\d+/);
+                          const babNum = babMatch ? babMatch[0] : '1';
+                          const babSecs = babSections[eq.bab] || [];
+                          const eqIdx = babSecs.filter(s => s.type === 'equation').findIndex(s => s.id === eq.id);
+                          return `Rumus ${babNum}.${eqIdx !== -1 ? eqIdx + 1 : 1}`;
+                        })();
+                        const displayTitle = eq.title && eq.title.trim() ? eq.title : resolvedEqPrefix;
+                        return (
+                          <div key={eq.id} className="flex items-baseline justify-between">
+                            <div className="flex items-baseline flex-1 mr-2 overflow-hidden">
+                              <span className="pr-2 relative z-10 bg-white">{displayTitle}</span>
+                              <span className="dot-leader"></span>
+                            </div>
+                            <span className="pl-2 font-normal text-right min-w-[25px]">{babPage}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className={getPageNumberClass('daftar-rumus')}>{getPageNumber('daftar-rumus')}</div>
+                </div>
+              )}
 
               {/* DYNAMIC CHAPTER PAGES (BAB I to V) */}
               {['bab1', 'bab2', 'bab3', 'bab4', 'bab5'].flatMap((babKey) => {
@@ -4998,6 +7521,7 @@ export default function Index() {
                         if (g.id === 'pernyataan') return layout.showPernyataan;
                         if (g.id === 'abstrak-indo') return layout.showAbstractIndo;
                         if (g.id === 'abstrak-eng') return layout.showAbstractEng;
+                        if (g.id === 'daftar-rumus') return layout.showDaftarRumus;
                         return true;
                       }).map((g) => {
                         const checked = selectedDownloadSections.includes(g.id);
@@ -5015,7 +7539,9 @@ export default function Index() {
                               }}
                               className="rounded border-slate-700 bg-slate-900 text-indigo-600 focus:ring-indigo-500/25 focus:ring-offset-0"
                             />
-                            <span className={checked ? 'text-slate-200 font-medium' : 'text-slate-400'}>{g.name}</span>
+                            <span className={checked ? 'text-slate-200 font-medium' : 'text-slate-400'}>
+                              {g.id.startsWith('bab') ? `${babTitles[g.id].prefix} ${babTitles[g.id].title}` : g.name}
+                            </span>
                           </label>
                         );
                       })}
@@ -5068,6 +7594,89 @@ export default function Index() {
               </button>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* AI PROMPT OPTIONS MODAL */}
+      {showAiPromptModal && aiPromptTarget && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 no-print text-slate-100 p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-[480px] flex flex-col shadow-2xl p-6 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3 mb-4">
+              <h3 className="font-bold flex items-center gap-2 text-sm text-slate-200">
+                <Sparkles className="h-5 w-5 text-indigo-500" />
+                Tulis Konten dengan AI
+              </h3>
+              <button 
+                onClick={() => {
+                  setShowAiPromptModal(false);
+                  setAiPromptTarget(null);
+                }} 
+                className="text-slate-400 hover:text-slate-200 text-xs"
+              >
+                Batal
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              <div>
+                <span className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Target Bagian:</span>
+                <div className="bg-slate-950/60 p-2.5 rounded-lg border border-slate-850 text-xs font-bold text-slate-350">
+                  {aiPromptTarget.displayTitle}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                  Instruksi Tambahan (Opsional)
+                </label>
+                <textarea
+                  value={aiPromptInput}
+                  onChange={(e) => setAiPromptInput(e.target.value)}
+                  placeholder="Contoh: sertakan tabel perbandingan metode, tulis dalam 2 paragraf, gunakan nada akademis formal, dll."
+                  rows={4}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                />
+                <span className="block text-[9px] text-slate-500 mt-1 leading-normal">
+                  *Jika Anda meminta tabel, AI akan otomatis menghasilkan data tabel dan menambahkannya sebagai bagian tabel dinamis baru tepat di bawah paragraf ini.
+                </span>
+              </div>
+            </div>
+
+            <div className="border-t border-slate-800 pt-4 mt-5 flex justify-end gap-2 text-xs">
+              <button
+                onClick={() => {
+                  const target = aiPromptTarget;
+                  setShowAiPromptModal(false);
+                  setAiPromptTarget(null);
+                  if (target.legacyKey) {
+                    handleAIGenerateSection(target.legacyKey, target.displayTitle, '');
+                  } else {
+                    handleAIGenerateDynamic(target.babKey, target.id, target.displayTitle, '');
+                  }
+                }}
+                className="px-4 py-2 border border-slate-800 hover:bg-slate-850 rounded-lg font-bold text-slate-350 hover:text-slate-200"
+              >
+                Tulis Langsung
+              </button>
+              <button
+                onClick={() => {
+                  const target = aiPromptTarget;
+                  const prompt = aiPromptInput;
+                  setShowAiPromptModal(false);
+                  setAiPromptTarget(null);
+                  if (target.legacyKey) {
+                    handleAIGenerateSection(target.legacyKey, target.displayTitle, prompt);
+                  } else {
+                    handleAIGenerateDynamic(target.babKey, target.id, target.displayTitle, prompt);
+                  }
+                }}
+                className="bg-indigo-600 hover:bg-indigo-700 px-5 py-2 rounded-lg font-bold text-white flex items-center gap-1.5 shadow-md shadow-indigo-650/10"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Tulis dengan Prompt
+              </button>
+            </div>
           </div>
         </div>
       )}

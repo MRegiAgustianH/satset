@@ -120,6 +120,10 @@ PENTING: Anda harus mengembalikan respon dalam format JSON array yang valid tanp
             'metode' => 'nullable|string|max:255',
             'section_title' => 'nullable|string|max:500',
             'bab_context' => 'nullable|string|max:255',
+            'ai_write_style' => 'nullable|string|max:255',
+            'year_start' => 'nullable|integer',
+            'year_end' => 'nullable|integer',
+            'additional_prompt' => 'nullable|string|max:1000',
         ]);
 
         $apiKey = $this->getApiKey($request);
@@ -134,35 +138,99 @@ PENTING: Anda harus mengembalikan respon dalam format JSON array yang valid tanp
         $section = $request->input('section');
         $topik = $request->input('topik') ?? 'Sesuai judul';
         $metode = $request->input('metode') ?? 'Metode kualitatif/kuantitatif standar';
+        $aiWriteStyle = $request->input('ai_write_style', 'structured');
+        $yearStart = $request->input('year_start') ?? (date('Y') - 10);
+        $yearEnd = $request->input('year_end') ?? date('Y');
 
         // Handle dynamic section generation (for imported DOCX headings etc.)
         if ($section === '__dynamic__') {
             $sectionTitle = $request->input('section_title', 'Bagian ini');
             $babContext = $request->input('bab_context', 'BAB');
 
-            $prompt = "Anda adalah penulis akademik skripsi Indonesia yang ahli. Tulis draf konten ilmiah untuk bagian berikut:
+            $prompt = "Anda adalah penulis akademik skripsi Indonesia yang ahli dan dosen pembimbing senior. Tulis draf konten ilmiah yang sangat terfokus, mendalam, dan spesifik untuk bagian sub-bab berikut:
 
 Judul Skripsi: {$title}
-Topik: {$topik}
-Metode: {$metode}
+Topik Penelitian: {$topik}
+Metode/Algoritma: {$metode}
 Konteks BAB: {$babContext}
 Judul Sub-Bab: {$sectionTitle}
 
-Ketentuan:
-- Tulis dalam bahasa Indonesia akademis yang formal dan ilmiah
-- Tulis minimal 2-3 paragraf yang mendalam dan relevan sesuai konteks bab dan judul sub-bab
-- Sesuaikan gaya penulisan dengan konteks bab (misalnya: BAB I = pendahuluan/latar belakang, BAB II = tinjauan pustaka/teori, BAB III = metodologi, BAB IV = hasil/pembahasan, BAB V = penutup/kesimpulan)
-- Jika judul sub-bab berkaitan dengan poin-poin (identifikasi, rumusan, kesimpulan, saran), sajikan dalam format poin bernomor
+Ketentuan Gaya & Penulisan:
+1. Tulis dalam bahasa Indonesia akademis yang sangat formal, ilmiah, mengalir, dan presisi (sesuai PUEBI/EYD).
+2. Tulis minimal 2-3 paragraf mendalam yang secara langsung membahas topik/judul sub-bab tersebut secara logis.
+3. JANGAN menulis ringkasan umum dari seluruh alur penelitian atau bab jika judul sub-bab merujuk ke aktivitas/proses spesifik (seperti 'Communication', 'Akuisisi Pengetahuan', 'Desain Antarmuka', dll.). Bahaslah secara terfokus mengenai detail pelaksanaan dan luaran sub-bab tersebut.
+4. Struktur penulisan sub-bab harus mencakup aspek berikut:
+   - Paragraf 1 (Definisi & Relevansi): Jelaskan apa itu [Judul Sub-Bab] dalam konteks metodologi/sistem yang dibangun. Hubungkan langsung dengan Judul Skripsi, Topik, dan Metode/Algoritma yang digunakan.
+   - Paragraf 2 (Tujuan & Detail Proses): Terangkan secara konkret bagaimana proses atau tahapan tersebut dilakukan secara riil (misalnya jika tentang 'Communication' atau 'Akuisisi Pengetahuan', jelaskan komunikasi/wawancara dengan pakar/praktisi yang relevan seperti dokter/psikolog/ahli terkait topik skripsi, observasi lapangan, atau studi literatur).
+   - Paragraf 3 (Hasil/Output & Dampak): Jelaskan output nyata/konkret yang didapatkan dari tahap ini (seperti identifikasi gejala Thalassemia, data latih Naive Bayes, penentuan batasan sistem, basis aturan, kebutuhan fungsional/non-fungsional, dll.) dan bagaimana hal tersebut menjadi landasan untuk tahap selanjutnya dalam sistem/penelitian.
 
-PENTING: Berikan LANGSUNG isi draf tulisan yang siap disalin tanpa teks sapaan pembuka (seperti 'Halo', 'Berikut adalah draf...') atau teks penutup. Tulis secara mendalam, rapi, dan ilmiah.";
+CONTOH ACUAN GAYA & STRUKTUR (untuk sub-bab 'Communication' pada skripsi Sistem Pakar Game Online):
+\"Communication merupakan tahapan awal yang fundamental dalam pengembangan sistem pakar untuk analisis skrining tingkat kecanduan game online menggunakan metode Certainty Factor. Tahap ini bertujuan untuk memperoleh pemahaman yang mendalam mengenai gejala kecanduan, tingkat kecanduan, serta proses penalaran yang digunakan oleh pakar dalam menentukan tingkat kecanduan. Proses communication dilakukan melalui wawancara dengan psikolog sebagai pakar serta didukung oleh observasi terhadap perilaku penggunaan game online pada remaja dan masyarakat umum. Hasil dari tahap ini digunakan untuk mengidentifikasi kebutuhan sistem, baik fungsional maupun non-fungsional, serta sebagai dasar dalam penyusunan basis pengetahuan berupa aturan if–then dan penentuan nilai Certainty Factor yang akan digunakan dalam proses inferensi sistem pakar.\"
+
+PENTING: Terapkan gaya, alur, dan struktur contoh di atas ke sub-bab '{$sectionTitle}' dengan menyesuaikannya secara logis dan ilmiah terhadap Judul Skripsi ('{$title}'), Topik ('{$topik}'), dan Metode ('{$metode}') Anda.
+Berikan LANGSUNG isi draf tulisan yang siap disalin tanpa teks sapaan pembuka (seperti 'Halo', 'Berikut adalah draf...') atau teks penutup. Tulis secara mendalam, rapi, dan ilmiah.";
         } else {
-            // Tailor the prompt based on the specific section requested
-            $sectionPrompts = [
-            'latar_belakang' => "Tulis draf paragraf mendalam untuk bagian 'Latar Belakang Masalah' (BAB I) skripsi.
+            // Build tailored background prompt if section is latar_belakang
+            $latarBelakangPrompt = "";
+            if ($aiWriteStyle === 'structured') {
+                $latarBelakangPrompt = "Tulis draf akademis terstruktur untuk bagian 'Latar Belakang Masalah' (BAB I) skripsi.
 Judul Skripsi: {$title}
 Topik: {$topik}
 Metode: {$metode}
-Ketentuan: Tulis dalam bahasa Indonesia akademis yang formal dan ilmiah. Deskripsikan urgensi masalah, kesenjangan antara kenyataan dengan teori (gap analysis), dan mengapa judul ini penting untuk diteliti. Tulis minimal 3 paragraf panjang.",
+
+Anda HARUS menyusun draf latar belakang ini dalam tepat 4 alinea (paragraf) yang sangat spesifik dan mendalam. Setiap alinea HARUS diawali dengan baris komentar panduan dalam format [Komentar Alinea X: ...].
+
+Berikut adalah ketentuan detail untuk masing-masing alinea:
+
+1. [Komentar Alinea 1: Teori, Konsep, dan Teknologi]
+   - Alinea 1 harus berisi penjelasan mengenai teori-teori makro, konsep dasar, dan teknologi relevan yang menaungi penelitian ini.
+   - Paragraf ini WAJIB menyertakan minimal 1-2 sitasi/referensi dari jurnal ilmiah atau buku yang terpercaya dan relevan yang terbit antara tahun {$yearStart} sampai {$yearEnd}.
+   - Tulis sitasi tersebut dalam format standar sitasi ilmiah (contoh: Sugiyono, 2018 atau DeLone & McLean, 2016), dan sertakan tautan URL yang valid/dapat diakses ke halaman sumber atau file PDF unduhan dari Google Scholar/ResearchGate pada sitasi tersebut menggunakan format Markdown link, contoh: [Sugiyono (2018)](https://...) atau [DeLone & McLean (2016)](https://...).
+   - Minimal 3 kalimat.
+
+2. [Komentar Alinea 2: Masalah Penelitian (Apa, Mengapa, Kenapa, Siapa)]
+   - Alinea 2 harus menguraikan masalah penelitian secara komprehensif.
+   - Jawab pertanyaan-pertanyaan ini di dalam narasi:
+     * Apa masalahnya? (What)
+     * Mengapa ia bermasalah? (Why)
+     * Kenapa hal ini dipermasalahkan / diperdebatkan / penting untuk dicermati?
+     * Siapa yang mempermasalahkan / terkena dampak dari masalah ini? (Who)
+   - Tulis secara mendalam untuk menyajikan gap analysis (kesenjangan antara das sollen/harapan dan das sein/kenyataan).
+   - Minimal 3 kalimat.
+
+3. [Komentar Alinea 3: Solusi dengan Teknologi/Metode]
+   - Alinea 3 harus menjelaskan penyelesaian masalah yang dipaparkan pada alinea 2 dengan menggunakan teknologi, konsep, atau metode yang dibahas di alinea 1.
+   - Jelaskan bagaimana teknologi/metode tersebut bekerja dan mengapa ia merupakan solusi yang tepat untuk mengatasi masalah tersebut.
+   - Minimal 3 kalimat.
+
+4. [Komentar Alinea 4: Pemilihan Judul dengan Sasaran]
+   - Alinea 4 harus menjabarkan justifikasi pemilihan judul skripsi dengan sasaran/target yang ingin dicapai.
+   - Jelaskan apa sasaran akhir dari penelitian ini (seperti efisiensi, efektivitas, kemudahan penggunaan, daya tarik, dll.) serta kontribusi praktis atau akademisnya.
+   - Minimal 3 kalimat.
+
+Ketentuan Batasan:
+- Total panjang tulisan keseluruhan maksimal setara 2 halaman A4 (buatlah draf yang padat, berbobot, dan mengalir dengan baik).
+- Setiap alinea wajib memiliki MINIMAL 3 kalimat akademis yang bermakna mendalam.
+- Gaya bahasa harus formal, ilmiah, menggunakan bahasa Indonesia akademis (PUEBI/EYD).
+- PENTING: Tuliskan baris komentar panduan di awal setiap paragraf seperti ini:
+  [Komentar Alinea 1: Teori, Konsep, dan Teknologi]
+  (Teks isi Alinea 1...)
+
+  [Komentar Alinea 2: Masalah Penelitian (Apa, Mengapa, Kenapa, Siapa)]
+  (Teks isi Alinea 2...)
+
+  ... dan seterusnya. Jangan memberikan kata pengantar pembuka atau penutup.";
+            } else {
+                $latarBelakangPrompt = "Tulis draf paragraf mendalam untuk bagian 'Latar Belakang Masalah' (BAB I) skripsi secara langsung mengalir tanpa menyertakan komentar panduan alinea.
+Judul Skripsi: {$title}
+Topik: {$topik}
+Metode: {$metode}
+Ketentuan: Tulis dalam bahasa Indonesia akademis yang formal dan ilmiah. Deskripsikan urgensi masalah, kesenjangan antara kenyataan dengan teori (gap analysis), dan mengapa judul ini penting untuk diteliti. Tulis minimal 3 paragraf panjang.";
+            }
+
+            // Tailor the prompt based on the specific section requested
+            $sectionPrompts = [
+            'latar_belakang' => $latarBelakangPrompt,
 
             'identifikasi_masalah' => "Tulis draf bagian 'Identifikasi Masalah' (BAB I) skripsi.
 Judul Skripsi: {$title}
@@ -237,6 +305,35 @@ Ketentuan: Tulis saran teoritis dan praktis bagi pembaca, universitas, atau pene
             $prompt .= "\n\nPENTING: Berikan LANGSUNG isi draf tulisan yang siap disalin tanpa teks sapaan pembuka (seperti 'Halo', 'Berikut adalah draf...') atau teks penutup. Tulis secara mendalam, rapi, dan ilmiah.";
         }
 
+        $additionalPrompt = $request->input('additional_prompt');
+        if ($additionalPrompt) {
+            $prompt .= "\n\nInstruksi tambahan dari pengguna (HARUS dipenuhi): \"{$additionalPrompt}\"";
+        }
+        
+        $jsonInstruction = "\n\nPENTING: Anda HARUS mengembalikan respon dalam format JSON yang valid dengan skema berikut:
+{
+  \"content\": \"Draf teks tulisan skripsi yang lengkap dan mendalam (berisi beberapa paragraf sesuai ketentuan). JANGAN menyertakan format markdown bold/italic seperti **, *, __, _ di dalam teks ini.\",
+  \"table\": null
+}
+
+Jika pengguna secara spesifik meminta tabel (misalnya dalam instruksi tambahan) ATAU jika sub-bab ini secara akademis sangat membutuhkan tabel (misalnya jadwal penelitian, perbandingan metode, hasil pengujian, dll.), isi field \"table\" dengan objek dengan skema berikut:
+{
+  \"title\": \"Judul Tabel (contoh: 'Tabel 3.1 Perbandingan Metode Sistem Pakar')\",
+  \"headers\": \"Header kolom dipisahkan koma (contoh: 'No, Metode, Karakteristik, Kelebihan, Kekurangan, Alasan Tidak Dipilih')\",
+  \"rows\": [
+    [\"1\", \"Certainty Factor\", \"Menghitung tingkat keyakinan berdasarkan gejala...\", \"Mampu menangani ketidakpastian...\", \"Membutuhkan nilai bobot dari pakar\", \"Dipilih karena sesuai untuk skrining kecanduan game online...\"],
+    [\"2\", \"Forward Chaining\", \"Penelusuran berdasarkan rule IF-THEN...\", \"Mudah dipahami dan diterapkan\", \"Tidak menghasilkan tingkat keyakinan\", \"Kurang sesuai karena penelitian membutuhkan nilai keyakinan...\"]
+  ]
+}
+
+PENTING: Khusus jika tabel tersebut berupa perbandingan metode atau algoritma sistem pakar/kecerdasan buatan, Anda WAJIB menggunakan kolom-kolom persis seperti di atas:
+Headers: No, Metode, Karakteristik, Kelebihan, Kekurangan, Alasan Tidak Dipilih.
+Sesuaikan isian barisnya (metode, kelebihan, kekurangan, dan alasan) dengan metode/topik yang relevan dengan Judul Skripsi ('{$title}') dan Metode ('{$metode}') Anda. Untuk metode yang terpilih, jelaskan alasan mengapa ia dipilih (Dipilih karena...). Untuk metode lainnya, jelaskan alasan mengapa tidak dipilih (Kurang sesuai karena...).
+
+Pastikan respon Anda murni merupakan string JSON yang valid agar dapat diproses dengan `json_decode`. Jangan menyertakan teks pembuka atau penutup di luar JSON tersebut.";
+
+        $prompt .= $jsonInstruction;
+
         try {
             $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}";
             
@@ -247,6 +344,9 @@ Ketentuan: Tulis saran teoritis dan praktis bagi pembaca, universitas, atau pene
                             ['text' => $prompt]
                         ]
                     ]
+                ],
+                'generationConfig' => [
+                    'responseMimeType' => 'application/json'
                 ]
             ]);
 
@@ -257,10 +357,46 @@ Ketentuan: Tulis saran teoritis dan praktis bagi pembaca, universitas, atau pene
 
             $resultText = $response->json('candidates.0.content.parts.0.text');
             // Clean up backticks or raw markdown wrappers if Gemini insists on returning them
-            $resultText = preg_replace('/^```html?\s*|\s*```$/i', '', trim($resultText));
+            $resultText = preg_replace('/^```json\s*|^```html?\s*|\s*```$/i', '', trim($resultText));
             $resultText = trim($resultText);
-
-            return response()->json(['content' => $resultText]);
+            
+            $jsonData = json_decode($resultText, true);
+            if (json_last_error() === JSON_ERROR_NONE && isset($jsonData['content'])) {
+                $content = $jsonData['content'];
+                $table = $jsonData['table'] ?? null;
+            } else {
+                // Fallback: treat the entire resultText as content
+                $content = $resultText;
+                $table = null;
+            }
+            
+            // Clean markdown
+            $content = preg_replace('/\*\*([^*]+)\*\*/', '$1', $content);
+            $content = preg_replace('/\*([^*]+)\*/', '$1', $content);
+            $content = preg_replace('/__([^_]+)__/', '$1', $content);
+            $content = preg_replace('/_([^_]+)_/', '$1', $content);
+            
+            if ($table && isset($table['headers'])) {
+                $table['title'] = preg_replace('/\*\*([^*]+)\*\*/', '$1', $table['title'] ?? '');
+                $table['title'] = preg_replace('/\*([^*]+)\*/', '$1', $table['title']);
+                $table['headers'] = preg_replace('/\*\*([^*]+)\*\*/', '$1', $table['headers']);
+                $table['headers'] = preg_replace('/\*([^*]+)\*/', '$1', $table['headers']);
+                if (isset($table['rows']) && is_array($table['rows'])) {
+                    foreach ($table['rows'] as &$row) {
+                        if (is_array($row)) {
+                            foreach ($row as &$cell) {
+                                $cell = preg_replace('/\*\*([^*]+)\*\*/', '$1', $cell);
+                                $cell = preg_replace('/\*([^*]+)\*/', '$1', $cell);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return response()->json([
+                'content' => trim($content),
+                'table' => $table
+            ]);
 
         } catch (\Exception $e) {
             Log::error('Generate section error: ' . $e->getMessage());
@@ -461,6 +597,8 @@ Ketentuan: Tulis saran teoritis dan praktis bagi pembaca, universitas, atau pene
     {
         $request->validate([
             'query' => 'required|string|max:500',
+            'year_start' => 'nullable|integer',
+            'year_end' => 'nullable|integer',
         ]);
 
         $apiKey = $this->getApiKey($request);
@@ -472,10 +610,16 @@ Ketentuan: Tulis saran teoritis dan praktis bagi pembaca, universitas, atau pene
         }
 
         $query = $request->input('query');
+        $yearStart = $request->input('year_start') ?? (date('Y') - 10);
+        $yearEnd = $request->input('year_end') ?? date('Y');
 
         $prompt = "Anda adalah pencari sitasi akademis. Cari referensi akademis nyata yang menyerupai pencarian di Google Scholar atau ResearchGate berdasarkan kata kunci berikut: \"{$query}\".
+        
+Referensi yang Anda kembalikan HARUS dipublikasikan antara tahun {$yearStart} sampai {$yearEnd} (inklusif). 
 
-Berikan 2 alternatif referensi ilmiah nyata (misalnya satu format buku dan satu format jurnal ilmiah jika memungkinkan). Lengkapi dengan detail asli seperti nama penulis, tahun, judul publikasi, penerbit/kota, atau nama jurnal beserta Volume, Nomor, dan Halaman.
+Berikan 2 alternatif referensi ilmiah nyata (misalnya satu format buku dan satu format jurnal ilmiah jika memungkinkan) yang sesuai. Lengkapi dengan detail asli seperti nama penulis, tahun publikasi (harus berada dalam rentang {$yearStart}-{$yearEnd}), judul publikasi, penerbit/kota, atau nama jurnal beserta Volume, Nomor, dan Halaman.
+
+PENTING: Setiap referensi HARUS menyertakan tautan/URL asli yang valid dan dapat diakses (misalnya dari researchgate.net, scholar.google.com, sciencedirect.com, ieeexplore.ieee.org, atau repository universitas terpercaya) yang mengarah ke publikasi tersebut atau file PDF unduhannya. Masukkan tautan ini pada atribut \"url\" di bawah.
 
 PENTING: Anda harus mengembalikan respon dalam format JSON array yang valid tanpa markup markdown atau teks lainnya. Struktur JSON harus persis seperti di bawah ini:
 [
@@ -485,7 +629,8 @@ PENTING: Anda harus mengembalikan respon dalam format JSON array yang valid tanp
     \"type\": \"book\" atau \"journal\" atau \"website\",
     \"title\": \"Judul Buku atau Artikel Jurnal\",
     \"publisher\": \"Penerbit & Kota (untuk buku) ATAU Nama Jurnal, Volume(Nomor), Halaman (untuk jurnal) (contoh: Alfabeta, Bandung atau MIS Quarterly, 27(1), 9-30)\",
-    \"source\": \"Google Scholar\" atau \"ResearchGate\"
+    \"source\": \"Google Scholar\" atau \"ResearchGate\",
+    \"url\": \"Tautan/URL lengkap yang valid dan dapat diakses langsung untuk melihat/mengunduh PDF (contoh: https://www.researchgate.net/profile/Delone/publication/220272097_The_DeLone_and_McLean_Model_of_Information_Systems_Success_A_Ten-Year_Update/links/54e76a6e0cf27a6de10cdbb8.pdf)\"
   },
   ...
 ]";
