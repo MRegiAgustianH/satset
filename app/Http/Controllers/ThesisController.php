@@ -429,12 +429,14 @@ Pastikan respon Anda murni merupakan string JSON yang valid agar dapat diproses 
             $fileSaved = false;
         }
 
-        // 2. Save to Database
+        // 2. Save to Database — keyed by the user's filename (slug) so each named
+        // draft maps to exactly one row, regardless of cover title changes.
         $dbSaved = false;
         try {
             ThesisDraft::updateOrCreate(
-                ['title' => $draftData['cover']['title'] ?? 'Untitled'],
+                ['slug' => $safeFilename],
                 [
+                    'title' => $draftData['cover']['title'] ?? 'Untitled',
                     'author' => $draftData['cover']['author'] ?? 'Unknown',
                     'draft_data' => $draftData
                 ]
@@ -470,6 +472,7 @@ Pastikan respon Anda murni merupakan string JSON yang valid agar dapat diproses 
             $dbDrafts = ThesisDraft::orderBy('updated_at', 'desc')->get()->map(function($d) {
                 return [
                     'id' => $d->id,
+                    'slug' => $d->slug,
                     'title' => Str::limit($d->title, 60),
                     'author' => $d->author,
                     'updated_at' => $d->updated_at->diffForHumans(),
@@ -482,7 +485,10 @@ Pastikan respon Anda murni merupakan string JSON yang valid agar dapat diproses 
             Log::warning('Failed loading drafts from database: ' . $e->getMessage());
         }
 
-        // 2. Load from File Storage fallback
+        // Collect DB slugs so file entries that already exist as DB rows are not shown twice
+        $dbSlugs = $drafts->pluck('slug')->filter()->values()->all();
+
+        // 2. Load from File Storage fallback (skip files that already exist as a DB draft)
         try {
             $files = Storage::files("thesis_drafts");
             $fileDrafts = collect($files)->map(function($filePath) {
@@ -496,20 +502,23 @@ Pastikan respon Anda murni merupakan string JSON yang valid agar dapat diproses 
 
                 return [
                     'id' => $filename,
+                    'slug' => $filename,
                     'title' => Str::limit($title, 60),
                     'author' => $author,
                     'updated_at' => date('Y-m-d H:i', $lastModified),
                     'source' => 'file',
                     'key' => 'file_' . $filename
                 ];
+            })->filter(function($f) use ($dbSlugs) {
+                return !in_array($f['slug'], $dbSlugs);
             });
             $drafts = $drafts->merge($fileDrafts);
         } catch (\Exception $e) {
             Log::error('Failed loading drafts from storage: ' . $e->getMessage());
         }
 
-        // Unique by key or title
-        return response()->json($drafts->unique('title')->values());
+        // Show every distinct saved draft (unique DB row / file slug)
+        return response()->json($drafts->unique('key')->values());
     }
 
     /**
@@ -569,6 +578,14 @@ Pastikan respon Anda murni merupakan string JSON yang valid agar dapat diproses 
             try {
                 $draft = ThesisDraft::find($id);
                 if ($draft) {
+                    // Also remove the matching file backup so it doesn't reappear in the list
+                    $slug = $draft->slug ?: Str::slug($draft->title ?? '', '_');
+                    if ($slug) {
+                        $filePath = "thesis_drafts/{$slug}.json";
+                        if (Storage::exists($filePath)) {
+                            Storage::delete($filePath);
+                        }
+                    }
                     $draft->delete();
                     $deleted = true;
                 }
@@ -577,9 +594,16 @@ Pastikan respon Anda murni merupakan string JSON yang valid agar dapat diproses 
             }
         } else {
             try {
+                // 'file' source: $id is the filename (slug)
                 $filePath = "thesis_drafts/{$id}.json";
                 if (Storage::exists($filePath)) {
                     Storage::delete($filePath);
+                    $deleted = true;
+                }
+                // Also remove any DB rows tied to this same slug so it's fully gone
+                $rows = ThesisDraft::where('slug', $id)->get();
+                foreach ($rows as $row) {
+                    $row->delete();
                     $deleted = true;
                 }
             } catch (\Exception $e) {
@@ -889,9 +913,42 @@ Harap isi nilai-nilai di atas sesuai dengan panduan. Jika ada yang tidak disebut
         $fileData = file_get_contents($filePath);
         if ($fileData === false) return '';
         
-        // Extract printable strings of at least 4 characters
-        preg_match_all('/[\x20-\x7E]{4,}/', $fileData, $matches);
-        return implode(' ', $matches[0]);
+        // 1. Try to extract UTF-16LE text blocks (common in binary .doc Word 97-2003 files)
+        // Match printable ASCII, Latin-1 Supplement, and common control characters (CR, LF, Tab) followed by \x00
+        preg_match_all('/(?:[\x09\x0A\x0D\x20-\x7E\xA0-\xFF]\x00){4,}/', $fileData, $utf16Matches);
+        $extractedText = '';
+        if (!empty($utf16Matches[0])) {
+            foreach ($utf16Matches[0] as $match) {
+                $converted = mb_convert_encoding($match, 'UTF-8', 'UTF-16LE');
+                $extractedText .= $converted . "\n";
+            }
+        }
+        
+        // 2. Try to extract ANSI/ASCII text blocks
+        preg_match_all('/[\x09\x0A\x0D\x20-\x7E\xA0-\xFF]{4,}/', $fileData, $ansiMatches);
+        if (!empty($ansiMatches[0])) {
+            foreach ($ansiMatches[0] as $match) {
+                // Ignore matching binary headers/metadata structures
+                if (!preg_match('/^(?:Microsoft|WordDocument|SummaryInformation|DocumentSummary|CompObj|ObjectPool|MSWordDoc|Word\.Document)/i', $match)) {
+                    $extractedText .= $match . "\n";
+                }
+            }
+        }
+        
+        // Clean up common OLE2 binary metadata words
+        $garbage = [
+            'WordDocument', 'SummaryInformation', 'DocumentSummaryInformation',
+            'CompObj', 'ObjectPool', 'Microsoft Word', 'MSWordDoc', 'Word.Document.8'
+        ];
+        foreach ($garbage as $word) {
+            $extractedText = str_ireplace($word, '', $extractedText);
+        }
+        
+        // Normalize line breaks and spaces
+        $extractedText = preg_replace('/[ \t]+/', ' ', $extractedText);
+        $extractedText = preg_replace('/\n+/', "\n", $extractedText);
+        
+        return trim($extractedText);
     }
 
     private function analyzeTextHeuristics($text)
