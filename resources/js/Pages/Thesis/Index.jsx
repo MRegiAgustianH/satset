@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Head } from '@inertiajs/react';
 import { 
   GraduationCap, Moon, Sun, Sliders, FileText, BookOpen, Sparkles, 
@@ -9,7 +9,6 @@ import {
   Bold, Italic, Underline, Strikethrough, RemoveFormatting,
   ListOrdered, Scissors, Copy, ClipboardPaste
 } from 'lucide-react';
-import mammoth from 'mammoth';
 
 const escapeHtml = (unsafe) => {
   if (!unsafe) return '';
@@ -19,6 +18,27 @@ const escapeHtml = (unsafe) => {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+};
+
+// Lightweight memoization for pure (string -> string) renderers.
+// These functions are called inline inside dangerouslySetInnerHTML for every
+// paragraph/cell/heading on every render, so caching their output by input
+// string avoids re-running expensive regexes when the text hasn't changed.
+const createStringMemo = (fn, maxSize = 2000) => {
+  const cache = new Map();
+  return (input) => {
+    const key = input == null ? '' : String(input);
+    const cached = cache.get(key);
+    if (cached !== undefined) return cached;
+    const result = fn(input);
+    // Simple bounded cache: drop the oldest entry when full.
+    if (cache.size >= maxSize) {
+      const oldestKey = cache.keys().next().value;
+      cache.delete(oldestKey);
+    }
+    cache.set(key, result);
+    return result;
+  };
 };
 
 const ENGLISH_WORDS_LIST = [
@@ -113,7 +133,7 @@ const compileItalicizeRegex = () => {
 
 const italicizeRegex = compileItalicizeRegex();
 
-const italicizeEnglishWordsText = (text) => {
+const italicizeEnglishWordsText = createStringMemo((text) => {
   if (!text) return '';
   // Split by <br> or <br /> to preserve HTML page breaks in headings and render correctly
   const parts = String(text).split(/<br\s*\/?>/i);
@@ -132,7 +152,7 @@ const italicizeEnglishWordsText = (text) => {
     return escaped;
   });
   return processedParts.join('<br />');
-};
+});
 
 // ============================================================================
 // FORMULA / MATH RENDERER
@@ -168,7 +188,7 @@ const fracHtmlMarkup = (num, den) =>
   `<span style="display:block;border-bottom:1px solid currentColor;padding:0 4px;line-height:1.3;">${num}</span>` +
   `<span style="display:block;padding:0 4px;line-height:1.3;">${den}</span></span>`;
 
-const renderFormula = (raw) => {
+const renderFormula = createStringMemo((raw) => {
   if (!raw && raw !== 0) return '';
   let s = escapeHtml(String(raw));
   const frags = [];
@@ -208,7 +228,7 @@ const renderFormula = (raw) => {
   s = renderInline(s);
   s = s.replace(/\u0000(\d+)\u0000/g, (m, i) => frags[+i]);
   return s;
-};
+});
 
 const cleanLineBreaks = (text) => {
   if (!text) return '';
@@ -392,6 +412,87 @@ const SECTION_GROUPS = [
   { id: 'bab5', name: 'BAB V PENUTUP' },
   { id: 'daftar-pustaka', name: 'Daftar Pustaka' },
 ];
+
+// ============================================================================
+// INLINE AUTO TEXTAREA
+// A textarea that keeps its own local state for instant, lag-free typing and
+// only "commits" the value to the heavy global document state (which drives
+// pagination + live preview) after the user pauses. This prevents a full
+// document re-pagination on every keystroke. It still auto-resizes and stays
+// in sync when the value is changed externally (e.g. the formatting toolbar).
+// ============================================================================
+const InlineAutoTextarea = ({ value, onCommit, delay = 250, autoResize = true, ...rest }) => {
+  const [val, setVal] = useState(value ?? '');
+  const taRef = useRef(null);
+  const timerRef = useRef(null);
+  const lastCommittedRef = useRef(value ?? '');
+  const onCommitRef = useRef(onCommit);
+  onCommitRef.current = onCommit;
+  const valRef = useRef(val);
+  valRef.current = val;
+
+  const autosize = () => {
+    if (!autoResize) return;
+    const el = taRef.current;
+    if (el) {
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    }
+  };
+
+  const commit = (text) => {
+    lastCommittedRef.current = text;
+    onCommitRef.current?.(text);
+  };
+
+  // Initial autosize.
+  useEffect(() => { autosize(); }, []);
+
+  // Sync when the value changes from outside (e.g. formatting toolbar / block
+  // switch), but ignore the echo of our own committed value.
+  useEffect(() => {
+    if (value === lastCommittedRef.current) return;
+    lastCommittedRef.current = value ?? '';
+    setVal(value ?? '');
+    requestAnimationFrame(autosize);
+  }, [value]);
+
+  // Flush any pending change when the editor goes away.
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        if (valRef.current !== lastCommittedRef.current) commit(valRef.current);
+      }
+    };
+  }, []);
+
+  const handleChange = (e) => {
+    const next = e.target.value;
+    setVal(next);
+    autosize();
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => commit(next), delay);
+  };
+
+  const handleBlur = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    if (valRef.current !== lastCommittedRef.current) commit(valRef.current);
+  };
+
+  return (
+    <textarea
+      ref={taRef}
+      value={val}
+      onChange={handleChange}
+      onBlur={handleBlur}
+      {...rest}
+    />
+  );
+};
 
 export default function Index() {
   // ==========================================================================
@@ -1257,14 +1358,10 @@ export default function Index() {
                 )}
                 
                 <div style={{ textIndent: 0 }}>
-                  <textarea
+                  <InlineAutoTextarea
                     id={`inline-textarea-${sec.id}`}
                     value={sec.content || ''}
-                    onChange={(e) => {
-                      handleUpdateSectionField(babKey, sec.id, 'content', e.target.value);
-                      e.target.style.height = 'auto';
-                      e.target.style.height = e.target.scrollHeight + 'px';
-                    }}
+                    onCommit={(text) => handleUpdateSectionField(babKey, sec.id, 'content', text)}
                     placeholder="Tulis paragraf di sini... Gunakan [pagebreak] untuk membuat halaman baru."
                     className="w-full bg-transparent text-black border-none focus:outline-none selection:bg-indigo-250/30"
                     style={{
@@ -1280,12 +1377,6 @@ export default function Index() {
                       overflow: 'hidden',
                     }}
                     autoFocus={sec.headingLevel === 0}
-                    ref={(el) => {
-                      if (el) {
-                        el.style.height = 'auto';
-                        el.style.height = el.scrollHeight + 'px';
-                      }
-                    }}
                   />
                 </div>
               </div>
@@ -2747,6 +2838,24 @@ export default function Index() {
     showToast(`Auto Save ${enabled ? 'diaktifkan' : 'dinonaktifkan'}.`);
   };
 
+  const localDraftTimerRef = useRef(null);
+  const pendingDraftStateRef = useRef(null);
+
+  // Build the full draft snapshot immediately (cheap), but defer the expensive
+  // JSON.stringify + synchronous localStorage write until typing pauses. Writing
+  // the whole document (including base64 figures) on every keystroke is what made
+  // editing paragraphs feel heavy.
+  const flushLocalDraft = () => {
+    const state = pendingDraftStateRef.current;
+    if (!state) return;
+    pendingDraftStateRef.current = null;
+    try {
+      localStorage.setItem('skripsi_laravel_draft_v2', JSON.stringify(state));
+    } catch (e) {
+      console.error('Error saving local draft:', e);
+    }
+  };
+
   const saveLocalDraft = (updatedState) => {
     try {
       const currentBabSections = updatedState?.babSections || babSections;
@@ -2758,11 +2867,21 @@ export default function Index() {
         figures: getAllFigures(currentBabSections),
         abstrakIndo, abstrakIndoKeywords, abstrakEng, abstrakEngKeywords, headingStyles, ...updatedState
       };
-      localStorage.setItem('skripsi_laravel_draft_v2', JSON.stringify(currentState));
+      pendingDraftStateRef.current = currentState;
+      if (localDraftTimerRef.current) clearTimeout(localDraftTimerRef.current);
+      localDraftTimerRef.current = setTimeout(flushLocalDraft, 600);
     } catch (e) {
-      console.error('Error saving local draft:', e);
+      console.error('Error preparing local draft:', e);
     }
   };
+
+  // Persist any pending draft when the component unmounts (e.g. navigating away).
+  useEffect(() => {
+    return () => {
+      if (localDraftTimerRef.current) clearTimeout(localDraftTimerRef.current);
+      flushLocalDraft();
+    };
+  }, []);
 
   const handleLogoUpload = (e) => {
     const file = e.target.files[0];
@@ -4890,7 +5009,9 @@ export default function Index() {
       let html;
       let docLayoutSettings = {};
       if (isZipDocx) {
-        // Real .docx (OOXML) — parse with mammoth
+        // Real .docx (OOXML) — parse with mammoth.
+        // Loaded on demand so the ~1MB mammoth library stays out of the main bundle.
+        const { default: mammoth } = await import('mammoth');
         const result = await mammoth.convertToHtml({ arrayBuffer });
         html = result.value;
       } else {
@@ -7935,10 +8056,11 @@ export default function Index() {
                                     )}
                                   </div>
                                 </div>
-                                <textarea 
+                                <InlineAutoTextarea 
                                   id={`textarea-content-${sec.id}`}
-                                  value={sec.content} 
-                                  onChange={e => handleUpdateSectionField(activeSection, sec.id, 'content', e.target.value)} 
+                                  value={sec.content || ''} 
+                                  autoResize={false}
+                                  onCommit={(text) => handleUpdateSectionField(activeSection, sec.id, 'content', text)} 
                                   onPaste={(e) => {
                                     const pastedText = e.clipboardData.getData('text');
                                     if (pastedText && (pastedText.includes('\n') || pastedText.includes('\r'))) {
