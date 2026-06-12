@@ -1,0 +1,18 @@
+export const SECTION_GROUPS = [
+  { id: 'cover', name: 'Sampul / Cover' },
+  { id: 'persetujuan', name: 'Lembar Persetujuan' },
+  { id: 'pengesahan', name: 'Lembar Pengesahan' },
+  { id: 'pernyataan', name: 'Pernyataan Keaslian' },
+  { id: 'abstrak-indo', name: 'Abstrak Indonesia' },
+  { id: 'abstrak-eng', name: 'Abstrak Inggris' },
+  { id: 'daftar-isi', name: 'Daftar Isi' },
+  { id: 'daftar-tabel', name: 'Daftar Tabel' },
+  { id: 'daftar-gambar', name: 'Daftar Gambar' },
+  { id: 'daftar-rumus', name: 'Daftar Rumus' },
+  { id: 'bab1', name: 'BAB I PENDAHULUAN' },
+  { id: 'bab2', name: 'BAB II TINJAUAN PUSTAKA' },
+  { id: 'bab3', name: 'BAB III METODOLOGI PENELITIAN' },
+  { id: 'bab4', name: 'BAB IV HASIL DAN PEMBAHASAN' },
+  { id: 'bab5', name: 'BAB V PENUTUP' },
+  { id: 'daftar-pustaka', name: 'Daftar Pustaka' },
+];

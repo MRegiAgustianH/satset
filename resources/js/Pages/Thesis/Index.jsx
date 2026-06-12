@@ -1,14 +1,53 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Head } from '@inertiajs/react';
-import { 
-  GraduationCap, Moon, Sun, Sliders, FileText, BookOpen, Sparkles, 
-  Save, FolderOpen, Printer, ZoomIn, ZoomOut, Info, AlertCircle, 
-  Check, Loader2, Database, Plus, Trash2, Search, Table, Image as ImageIcon,
-  Compass, List, RotateCcw, Wand2, ExternalLink, ListChecks,
-  PanelLeftClose, PanelLeftOpen, Clock, ArrowLeft,
+import {
+  GraduationCap, Moon, Sun, Sliders, FileText, BookOpen, Sparkles,
+  FolderOpen, ZoomIn, ZoomOut,
+  Loader2, Plus, Trash2, Search, Table, Image as ImageIcon,
+  Compass, List, RotateCcw, Wand2,
+  PanelLeftClose, PanelLeftOpen,
   Bold, Italic, Underline, Strikethrough, RemoveFormatting,
-  ListOrdered, Scissors, Copy, ClipboardPaste
+  ListOrdered, Scissors, Copy, ClipboardPaste, Ruler
 } from 'lucide-react';
+import { SECTION_GROUPS } from './constants/sectionGroups';
+import { cleanLineBreaks } from './utils/documentText';
+import {
+  computeMaskedCells,
+  computeMaskedHeaders,
+  normalizeHeaders,
+  normalizeTableRows,
+} from './utils/table';
+import { DOCX_MAMMOTH_STYLE_MAP, extractDocxLayout, extractDocxSnapshot, extractDraftSnapshotFromHtml } from './features/import-export/docxLayout';
+import { downloadHtmlAsDocx } from './features/import-export/docxExport';
+import { buildCoverWordHtml, buildTableWordHtml as buildWordTableHtml } from './features/import-export/wordHtmlBuilders';
+import { buildBabPagesMap, paginateListEntries, resolveBlockNumberingForBab } from './features/document-preview/layout';
+import {
+  deleteDraftRequest,
+  listDraftsRequest,
+  loadDraftRequest,
+  saveDraftRequest,
+} from './services/draftApi';
+import {
+  generateSectionRequest,
+  parseGuideRequest,
+  recommendTitlesRequest,
+  searchCitationRequest,
+} from './services/aiApi';
+import InlineAutoTextarea from './components/InlineAutoTextarea';
+import OutlineBuilderModal from './components/OutlineBuilderModal';
+import AiPromptModal from './components/AiPromptModal';
+import DownloadModal from './components/DownloadModal';
+import WelcomeModal from './components/WelcomeModal';
+import DraftManager from './components/DraftManager';
+import NewDraftChooser from './components/NewDraftChooser';
+import DraftListModal from './components/DraftListModal';
+import TablesFiguresPanel from './components/TablesFiguresPanel';
+import AiAssistantPanel from './components/AiAssistantPanel';
+import BibliographyPanel from './components/BibliographyPanel';
+import SidebarFooter from './components/SidebarFooter';
+import NavigationPanel from './components/NavigationPanel';
+import LayoutSettingsPanel from './components/LayoutSettingsPanel';
+import ToastNotification from './components/ToastNotification';
 
 const escapeHtml = (unsafe) => {
   if (!unsafe) return '';
@@ -229,270 +268,6 @@ const renderFormula = createStringMemo((raw) => {
   s = s.replace(/\u0000(\d+)\u0000/g, (m, i) => frags[+i]);
   return s;
 });
-
-const cleanLineBreaks = (text) => {
-  if (!text) return '';
-  // Normalize line endings to \n
-  let normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  
-  // Split by double newlines first (actual paragraph breaks)
-  const paragraphs = normalized.split(/\n\n+/);
-  
-  // For each paragraph, replace single newlines with a space, and trim multiple spaces
-  const cleanedParagraphs = paragraphs.map(p => {
-    let cleaned = p.replace(/\n/g, ' ');
-    cleaned = cleaned.replace(/\s+/g, ' ').trim();
-    return cleaned;
-  });
-  
-  // Join back with double newlines
-  return cleanedParagraphs.join('\n\n');
-};
-
-const splitParagraphText = (text, linesFit, widthPx, layout, isList) => {
-  const words = text.split(/\s+/);
-  const charWidth = 7.2;
-  const textWidthPx = isList ? (widthPx - 32) : widthPx;
-  const charsPerLine = Math.floor(textWidthPx / charWidth);
-  const textIndentPx = (!isList && layout.paragraphIndent === 'indented') ? 47 : 0;
-  
-  let currentLineIdx = 0;
-  let currentLineChars = 0;
-  let part1Words = [];
-  let part2Words = [];
-  
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i];
-    const wordLen = word.length + 1; // plus space
-    
-    let maxCharsForLine = charsPerLine;
-    if (currentLineIdx === 0 && !isList) {
-      maxCharsForLine = Math.floor((textWidthPx - textIndentPx) / charWidth);
-    }
-    
-    if (currentLineChars + word.length > maxCharsForLine && currentLineChars > 0) {
-      currentLineIdx++;
-      currentLineChars = 0;
-    }
-    
-    if (currentLineIdx < linesFit) {
-      part1Words.push(word);
-      currentLineChars += wordLen;
-    } else {
-      part2Words.push(word);
-    }
-  }
-  
-  return {
-    part1: part1Words.join(' '),
-    part2: part2Words.join(' ')
-  };
-};
-
-const getCsrfToken = () => {
-  const token = document.querySelector('meta[name="csrf-token"]');
-  if (token) return token.getAttribute('content');
-  const match = document.cookie.match(/XSRF-TOKEN=([^;]+)/);
-  if (match) return decodeURIComponent(match[1]);
-  return '';
-};
-
-const normalizeHeaders = (headers) => {
-  if (!headers) return [];
-  if (typeof headers === 'string') {
-    return headers.split(',').map(h => ({
-      text: h.trim(),
-      colSpan: 1,
-      rowSpan: 1,
-      bgColor: ''
-    }));
-  }
-  if (Array.isArray(headers)) {
-    return headers.map(h => {
-      if (h && typeof h === 'object') {
-        return {
-          text: h.text !== undefined ? String(h.text) : '',
-          colSpan: h.colSpan ? parseInt(h.colSpan) : 1,
-          rowSpan: h.rowSpan ? parseInt(h.rowSpan) : 1,
-          bgColor: h.bgColor || ''
-        };
-      }
-      return {
-        text: h !== undefined ? String(h) : '',
-        colSpan: 1,
-        rowSpan: 1,
-        bgColor: ''
-      };
-    });
-  }
-  return [];
-};
-
-const normalizeTableRows = (rows) => {
-  if (!Array.isArray(rows)) return [];
-  return rows.map(row => {
-    if (!Array.isArray(row)) return [];
-    return row.map(cell => {
-      if (cell && typeof cell === 'object') {
-        return {
-          text: cell.text !== undefined ? String(cell.text) : '',
-          colSpan: cell.colSpan ? parseInt(cell.colSpan) : 1,
-          rowSpan: cell.rowSpan ? parseInt(cell.rowSpan) : 1,
-          bgColor: cell.bgColor || ''
-        };
-      }
-      return {
-        text: cell !== undefined ? String(cell) : '',
-        colSpan: 1,
-        rowSpan: 1,
-        bgColor: ''
-      };
-    });
-  });
-};
-
-const computeMaskedHeaders = (headers) => {
-  if (!Array.isArray(headers)) return [];
-  const masked = Array(headers.length).fill(false);
-  for (let i = 0; i < headers.length; i++) {
-    if (masked[i]) continue;
-    const cell = headers[i];
-    const cSpan = cell ? (cell.colSpan || 1) : 1;
-    for (let dc = 1; dc < cSpan; dc++) {
-      if (i + dc < headers.length) {
-        masked[i + dc] = true;
-      }
-    }
-  }
-  return masked;
-};
-
-const computeMaskedCells = (rows) => {
-  const R = rows.length;
-  if (R === 0) return [];
-  const C = Math.max(...rows.map(row => row.length));
-  
-  const masked = Array(R).fill(null).map(() => Array(C).fill(false));
-  for (let r = 0; r < R; r++) {
-    const row = rows[r];
-    for (let c = 0; c < row.length; c++) {
-      if (masked[r][c]) continue;
-      const cell = row[c];
-      if (!cell) continue;
-      const rSpan = cell.rowSpan || 1;
-      const cSpan = cell.colSpan || 1;
-      for (let dr = 0; dr < rSpan; dr++) {
-        for (let dc = 0; dc < cSpan; dc++) {
-          if (dr === 0 && dc === 0) continue;
-          if (r + dr < R && c + dc < rows[r + dr].length) {
-            masked[r + dr][c + dc] = true;
-          }
-        }
-      }
-    }
-  }
-  return masked;
-};
-
-const SECTION_GROUPS = [
-  { id: 'cover', name: 'Sampul / Cover' },
-  { id: 'persetujuan', name: 'Lembar Persetujuan' },
-  { id: 'pengesahan', name: 'Lembar Pengesahan' },
-  { id: 'pernyataan', name: 'Pernyataan Keaslian' },
-  { id: 'abstrak-indo', name: 'Abstrak Indonesia' },
-  { id: 'abstrak-eng', name: 'Abstrak Inggris' },
-  { id: 'daftar-isi', name: 'Daftar Isi' },
-  { id: 'daftar-tabel', name: 'Daftar Tabel' },
-  { id: 'daftar-gambar', name: 'Daftar Gambar' },
-  { id: 'daftar-rumus', name: 'Daftar Rumus' },
-  { id: 'bab1', name: 'BAB I PENDAHULUAN' },
-  { id: 'bab2', name: 'BAB II TINJAUAN PUSTAKA' },
-  { id: 'bab3', name: 'BAB III METODOLOGI PENELITIAN' },
-  { id: 'bab4', name: 'BAB IV HASIL DAN PEMBAHASAN' },
-  { id: 'bab5', name: 'BAB V PENUTUP' },
-  { id: 'daftar-pustaka', name: 'Daftar Pustaka' },
-];
-
-// ============================================================================
-// INLINE AUTO TEXTAREA
-// A textarea that keeps its own local state for instant, lag-free typing and
-// only "commits" the value to the heavy global document state (which drives
-// pagination + live preview) after the user pauses. This prevents a full
-// document re-pagination on every keystroke. It still auto-resizes and stays
-// in sync when the value is changed externally (e.g. the formatting toolbar).
-// ============================================================================
-const InlineAutoTextarea = ({ value, onCommit, delay = 250, autoResize = true, ...rest }) => {
-  const [val, setVal] = useState(value ?? '');
-  const taRef = useRef(null);
-  const timerRef = useRef(null);
-  const lastCommittedRef = useRef(value ?? '');
-  const onCommitRef = useRef(onCommit);
-  onCommitRef.current = onCommit;
-  const valRef = useRef(val);
-  valRef.current = val;
-
-  const autosize = () => {
-    if (!autoResize) return;
-    const el = taRef.current;
-    if (el) {
-      el.style.height = 'auto';
-      el.style.height = el.scrollHeight + 'px';
-    }
-  };
-
-  const commit = (text) => {
-    lastCommittedRef.current = text;
-    onCommitRef.current?.(text);
-  };
-
-  // Initial autosize.
-  useEffect(() => { autosize(); }, []);
-
-  // Sync when the value changes from outside (e.g. formatting toolbar / block
-  // switch), but ignore the echo of our own committed value.
-  useEffect(() => {
-    if (value === lastCommittedRef.current) return;
-    lastCommittedRef.current = value ?? '';
-    setVal(value ?? '');
-    requestAnimationFrame(autosize);
-  }, [value]);
-
-  // Flush any pending change when the editor goes away.
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        if (valRef.current !== lastCommittedRef.current) commit(valRef.current);
-      }
-    };
-  }, []);
-
-  const handleChange = (e) => {
-    const next = e.target.value;
-    setVal(next);
-    autosize();
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => commit(next), delay);
-  };
-
-  const handleBlur = () => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    if (valRef.current !== lastCommittedRef.current) commit(valRef.current);
-  };
-
-  return (
-    <textarea
-      ref={taRef}
-      value={val}
-      onChange={handleChange}
-      onBlur={handleBlur}
-      {...rest}
-    />
-  );
-};
 
 export default function Index() {
   // ==========================================================================
@@ -1256,18 +1031,35 @@ export default function Index() {
     const reader = new FileReader();
     reader.onload = (event) => {
       const base64Data = event.target.result;
-      setBabSections(prev => {
-        const updatedList = prev[babKey].map(sec => {
-          if (sec.id === id) {
-            return { ...sec, imageData: base64Data };
-          }
-          return sec;
+      const commitImage = (dimensions = {}) => {
+        setBabSections(prev => {
+          const updatedList = prev[babKey].map(sec => {
+            if (sec.id === id) {
+              return {
+                ...sec,
+                imageData: base64Data,
+                ...dimensions,
+              };
+            }
+            return sec;
+          });
+          const updated = { ...prev, [babKey]: updatedList };
+          saveLocalDraft({ babSections: updated });
+          return updated;
         });
-        const updated = { ...prev, [babKey]: updatedList };
-        saveLocalDraft({ babSections: updated });
-        return updated;
-      });
-      showToast("Gambar berhasil diunggah!");
+        showToast("Gambar berhasil diunggah!");
+      };
+
+      const image = new Image();
+      image.onload = () => {
+        commitImage({
+          imgNaturalWidth: image.naturalWidth,
+          imgNaturalHeight: image.naturalHeight,
+          imgAspectRatio: image.naturalWidth / image.naturalHeight,
+        });
+      };
+      image.onerror = () => commitImage();
+      image.src = base64Data;
     };
     reader.readAsDataURL(file);
   };
@@ -1446,6 +1238,8 @@ export default function Index() {
                 style={{
                   textIndent: el.noIndent ? 0 : undefined,
                   marginBottom: 0,
+                  overflowWrap: 'anywhere',
+                  wordBreak: 'break-word',
                 }}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -2062,6 +1856,7 @@ export default function Index() {
   
   // Zoom & UI States
   const [zoomLevel, setZoomLevel] = useState(80);
+  const [showMarginGuide, setShowMarginGuide] = useState(false);
   const [activeTab, setActiveTab] = useState('layout');
   const [activeSection, setActiveSection] = useState('cover');
   const [saveFilename, setSaveFilename] = useState('Draft_Skripsi');
@@ -2165,130 +1960,6 @@ export default function Index() {
     return list;
   };
 
-  const convertToAlpha = (num) => {
-    let s = '';
-    let temp = num;
-    while (temp > 0) {
-      let t = (temp - 1) % 26;
-      s = String.fromCharCode(97 + t) + s;
-      temp = Math.floor((temp - t) / 26);
-    }
-    return s || 'a';
-  };
-
-  const convertToRoman = (num) => {
-    const romanMap = [
-      { value: 1000, symbol: 'M' },
-      { value: 900, symbol: 'CM' },
-      { value: 500, symbol: 'D' },
-      { value: 400, symbol: 'CD' },
-      { value: 100, symbol: 'C' },
-      { value: 90, symbol: 'XC' },
-      { value: 50, symbol: 'L' },
-      { value: 40, symbol: 'XL' },
-      { value: 10, symbol: 'X' },
-      { value: 9, symbol: 'IX' },
-      { value: 5, symbol: 'V' },
-      { value: 4, symbol: 'IV' },
-      { value: 1, symbol: 'I' }
-    ];
-    let s = '';
-    let temp = num;
-    for (let i = 0; i < romanMap.length; i++) {
-      while (temp >= romanMap[i].value) {
-        s += romanMap[i].symbol;
-        temp -= romanMap[i].value;
-      }
-    }
-    return s || 'I';
-  };
-
-  const resolveBlockNumberingForBab = (babKey, sections) => {
-    if (!sections) return [];
-    const babMatch = babKey.match(/\d+/);
-    const babNum = babMatch ? parseInt(babMatch[0]) : 1;
-
-    let dotVal = 0;
-    let doubleDotVal = 0;
-    let arabicDotVal = 0;
-    let arabicParenVal = 0;
-    let arabicBothParenVal = 0;
-    let alphaDotLowerVal = 0;
-    let alphaDotUpperVal = 0;
-    let alphaParenLowerVal = 0;
-    let alphaBothParenLowerVal = 0;
-    let romanDotUpperVal = 0;
-    let romanDotLowerVal = 0;
-
-    return sections.map(s => {
-      if (s.type !== 'text') {
-        return { ...s, resolvedPrefix: '' };
-      }
-
-      let prefix = '';
-      const style = s.numberingStyle || 'none';
-
-      if (style === 'bab_prefix_dot') {
-        dotVal++;
-        doubleDotVal = 0;
-        arabicDotVal = 0;
-        arabicParenVal = 0;
-        arabicBothParenVal = 0;
-        alphaDotLowerVal = 0;
-        alphaDotUpperVal = 0;
-        alphaParenLowerVal = 0;
-        alphaBothParenLowerVal = 0;
-        romanDotUpperVal = 0;
-        romanDotLowerVal = 0;
-        prefix = `${babNum}.${dotVal} `;
-      } else if (style === 'bab_prefix_double_dot') {
-        doubleDotVal++;
-        arabicDotVal = 0;
-        arabicParenVal = 0;
-        arabicBothParenVal = 0;
-        alphaDotLowerVal = 0;
-        alphaDotUpperVal = 0;
-        alphaParenLowerVal = 0;
-        alphaBothParenLowerVal = 0;
-        romanDotUpperVal = 0;
-        romanDotLowerVal = 0;
-        prefix = `${babNum}.${dotVal || 1}.${doubleDotVal} `;
-      } else if (style === 'arabic_dot') {
-        arabicDotVal++;
-        prefix = `${arabicDotVal}. `;
-      } else if (style === 'arabic_paren') {
-        arabicParenVal++;
-        prefix = `${arabicParenVal}) `;
-      } else if (style === 'arabic_both_paren') {
-        arabicBothParenVal++;
-        prefix = `(${arabicBothParenVal}) `;
-      } else if (style === 'alpha_dot_lower') {
-        alphaDotLowerVal++;
-        prefix = `${convertToAlpha(alphaDotLowerVal)}. `;
-      } else if (style === 'alpha_dot_upper') {
-        alphaDotUpperVal++;
-        prefix = `${convertToAlpha(alphaDotUpperVal).toUpperCase()}. `;
-      } else if (style === 'alpha_paren_lower') {
-        alphaParenLowerVal++;
-        prefix = `${convertToAlpha(alphaParenLowerVal)}) `;
-      } else if (style === 'alpha_both_paren_lower') {
-        alphaBothParenLowerVal++;
-        prefix = `(${convertToAlpha(alphaBothParenLowerVal)}) `;
-      } else if (style === 'roman_dot_upper') {
-        romanDotUpperVal++;
-        prefix = `${convertToRoman(romanDotUpperVal)}. `;
-      } else if (style === 'roman_dot_lower') {
-        romanDotLowerVal++;
-        prefix = `${convertToRoman(romanDotLowerVal).toLowerCase()}. `;
-      }
-
-      return {
-        ...s,
-        resolvedPrefix: prefix
-      };
-    });
-  };
-
   const babPagesCacheRef = useRef({ deps: null, value: null });
 
   // Cached wrapper around the expensive pagination engine. Because this is called
@@ -2305,290 +1976,9 @@ export default function Index() {
     if (cache.deps && cache.deps.length === deps.length && cache.deps.every((d, i) => d === deps[i])) {
       return cache.value;
     }
-    const value = computeBabPagesMap(sections);
+    const value = buildBabPagesMap({ sections, layout, inlineEditingBlockId });
     babPagesCacheRef.current = { deps, value };
     return value;
-  };
-
-  const computeBabPagesMap = (sections = babSections) => {
-    const map = {};
-    
-    // Helper to estimate height of sub-elements in pixels (96 DPI standard, 1cm = 37.795px)
-    const estimateHeight = (el) => {
-      // printable width in cm
-      const contentWidthCm = 21 - ((parseFloat(layout.marginLeft) || 4.0) + (parseFloat(layout.marginRight) || 3.0));
-      const widthPx = contentWidthCm * 37.795;
-      
-      const fontSizePx = 16; // 12pt standard
-      const lineSpacing = parseFloat(layout.lineSpacing) || 2.0;
-      const lineGapPx = fontSizePx * lineSpacing; // e.g. 32px
-      
-      if (el.type === 'heading') {
-        const charCount = el.title.length;
-        const charsPerLine = Math.floor(widthPx / 7.5);
-        const lines = Math.ceil(charCount / charsPerLine) || 1;
-        return lines * lineGapPx + 24; // text + margins
-      }
-      
-      if (el.type === 'paragraph') {
-        const charCount = el.text.length;
-        const isList = /^[0-9a-zA-Z]+[\.\)]\s+/.test(el.text);
-        const charWidth = 7.2;
-        
-        let lines = 0;
-        if (isList) {
-          const listWidthPx = widthPx - 32;
-          const listCharsPerLine = Math.floor(listWidthPx / charWidth);
-          lines = Math.ceil(charCount / listCharsPerLine) || 1;
-        } else {
-          const textIndentPx = layout.paragraphIndent === 'indented' ? 47 : 0; // 1.25cm indent
-          const charsPerLine = Math.floor(widthPx / charWidth);
-          const firstLineChars = Math.floor((widthPx - textIndentPx) / charWidth);
-          if (charCount <= firstLineChars) {
-            lines = 1;
-          } else {
-            lines = 1 + Math.ceil((charCount - firstLineChars) / charsPerLine);
-          }
-        }
-        return (lines * lineGapPx) + 8; // match p-1 padding height (4px top + 4px bottom)
-      }
-      
-      if (el.type === 'table') {
-        const rowsCount = el.rows ? el.rows.length : 0;
-        const lineSpacing = parseFloat(layout.tableLineSpacing) || 1.0;
-        const rowHeight = 20 + Math.round(lineSpacing * 10);
-        return 25 + 35 + (rowsCount * rowHeight) + 40; // caption + headers + rows + margins
-      }
-      
-      if (el.type === 'figure') {
-        return 151 + 25 + 40; // box + caption + margins
-      }
-      
-      if (el.type === 'equation') {
-        const descLines = el.description ? el.description.split('\n').length : 0;
-        return 40 + (descLines * 20) + 40; // formula row + legend rows + margins
-      }
-      
-      if (el.type === 'pagebreak') {
-        return 0;
-      }
-      
-      return 50;
-    };
-
-    ['bab1', 'bab2', 'bab3', 'bab4', 'bab5'].forEach(babKey => {
-      const rawSections = sections[babKey] || [];
-      const resolved = resolveBlockNumberingForBab(babKey, rawSections);
-      
-      // Flatten into sub-elements
-      const subElements = [];
-      resolved.forEach(sec => {
-        if (sec.type === 'table') {
-          subElements.push({ type: 'table', blockId: sec.id, title: sec.title, headers: sec.headers, rows: sec.rows });
-        } else if (sec.type === 'figure') {
-          subElements.push({ type: 'figure', blockId: sec.id, title: sec.title, imageData: sec.imageData });
-        } else if (sec.type === 'equation') {
-          subElements.push({ type: 'equation', blockId: sec.id, title: sec.title, content: sec.content, description: sec.description });
-        } else {
-          if (sec.headingLevel > 0) {
-            subElements.push({ type: 'heading', blockId: sec.id, headingLevel: sec.headingLevel, title: `${sec.resolvedPrefix || ''}${sec.title}` });
-          }
-          if (sec.content && sec.content.trim()) {
-            const paragraphs = sec.content.split(/\n+/).filter(p => p.trim());
-            paragraphs.forEach(p => {
-              const cleanedText = p.trim();
-              if (cleanedText === '---') {
-                subElements.push({ type: 'pagebreak', blockId: sec.id });
-              } else {
-                // Split by [pagebreak] / [pagebrake] / [break] / [brake] (case-insensitive, optional hyphens/underscores/spaces)
-                const parts = p.split(/\[\s*(?:page[-_\s]*)?br[ea]{1,2}ke?\s*\]/gi);
-                parts.forEach((part, index) => {
-                  const cleanedPart = part.trim();
-                  if (cleanedPart) {
-                    subElements.push({ type: 'paragraph', blockId: sec.id, text: cleanedPart });
-                  }
-                  if (index < parts.length - 1) {
-                    subElements.push({ type: 'pagebreak', blockId: sec.id });
-                    // To prevent indentation issues for the next part if it continues
-                  }
-                });
-              }
-            });
-          }
-        }
-      });
-      
-      // Pack into pages
-      const pages = [];
-      let currentPage = [];
-      const maxPageHeight = (29.7 - ((parseFloat(layout.marginTop) || 4.0) + (parseFloat(layout.marginBottom) || 3.0))) * 37.795 - 12; // safety buffer for rendering differences
-      
-      const chapterHeaderHeight = 120; // Consumed height by chapter header on page 1 of BAB
-      let currentHeight = chapterHeaderHeight;
-      
-      let elIdx = 0;
-      while (elIdx < subElements.length) {
-        const el = subElements[elIdx];
-        
-        if (el.type === 'pagebreak') {
-          if (currentPage.length > 0) {
-            pages.push(currentPage);
-            currentPage = [];
-            currentHeight = 0;
-          }
-          elIdx++;
-          continue;
-        }
-        
-        const h = estimateHeight(el);
-        
-        // TABLE SPLITTING LOGIC
-        if (el.type === 'table') {
-          const isFirstPageOfTable = !el.isContinuation;
-          const lineSpacing = parseFloat(layout.tableLineSpacing) || 1.0;
-          const rowHeight = 20 + Math.round(lineSpacing * 10);
-          const hFresh = (isFirstPageOfTable ? 25 : 0) + 35 + (el.rows.length * rowHeight) + 40;
-          
-          if (currentHeight + h > maxPageHeight) {
-            // Case A: Entire table fits on a fresh page, and we are not already on one
-            if (hFresh <= maxPageHeight && currentPage.length > 0) {
-              pages.push(currentPage);
-              currentPage = [];
-              currentHeight = 0;
-              continue; // Do not increment elIdx, process this table again on the fresh page
-            }
-            
-            // Case B: Table is too big for a single page, must split!
-            const availableHeight = maxPageHeight - currentHeight;
-            const minH = (isFirstPageOfTable ? 25 : 0) + 35 + rowHeight + 40; // caption + header + 1 row + margin
-            
-            if (availableHeight >= minH) {
-              // We can split and fit some rows on the current page
-              const k = Math.floor((availableHeight - (isFirstPageOfTable ? 25 : 0) - 75) / rowHeight);
-              const rowsFit = Math.max(1, k);
-              
-              if (rowsFit < el.rows.length) {
-                const elPart1 = {
-                  ...el,
-                  rows: el.rows.slice(0, rowsFit)
-                };
-                const continuationTitle = el.title.endsWith(' (Lanjutan)') ? el.title : `${el.title} (Lanjutan)`;
-                const elPart2 = {
-                  ...el,
-                  title: continuationTitle,
-                  rows: el.rows.slice(rowsFit),
-                  isContinuation: true
-                };
-                
-                currentPage.push(elPart1);
-                pages.push(currentPage);
-                
-                currentPage = [];
-                currentHeight = 0;
-                
-                subElements.splice(elIdx + 1, 0, elPart2);
-                elIdx++;
-                continue;
-              }
-            } else {
-              // Not enough space on current page, push page and start table on next page
-              if (currentPage.length > 0) {
-                pages.push(currentPage);
-                currentPage = [];
-                currentHeight = 0;
-                continue; // Do not increment elIdx, process it again on the fresh page
-              }
-            }
-          }
-        }
-        
-        let totalH = h;
-        
-        // Prevent orphan headings (keep with next)
-        if (el.type === 'heading' && subElements[elIdx + 1]) {
-          totalH += estimateHeight(subElements[elIdx + 1]);
-        }
-        
-        if (currentHeight + totalH > maxPageHeight && currentPage.length > 0) {
-          // Check if we can split this paragraph to fill the remaining space on the current page
-          if (el.type === 'paragraph' && el.blockId !== inlineEditingBlockId) {
-            const availableHeight = maxPageHeight - currentHeight;
-            const lineSpacing = parseFloat(layout.lineSpacing) || 2.0;
-            const fontSizePx = 16;
-            const lineGapPx = fontSizePx * lineSpacing;
-            
-            // Available lines on current page
-            const linesFit = Math.floor((availableHeight - 8) / lineGapPx);
-            
-            // Calculate total lines of this paragraph
-            const charCount = el.text.length;
-            const isList = /^[0-9a-zA-Z]+[\.\)]\s+/.test(el.text);
-            const contentWidthCm = 21 - ((parseFloat(layout.marginLeft) || 4.0) + (parseFloat(layout.marginRight) || 3.0));
-            const widthPx = contentWidthCm * 37.795;
-            const charWidth = 7.2;
-            const textIndentPx = (!isList && layout.paragraphIndent === 'indented') ? 47 : 0;
-            const textWidthPx = isList ? (widthPx - 32) : widthPx;
-            const charsPerLine = Math.floor(textWidthPx / charWidth);
-            const firstLineChars = Math.floor((textWidthPx - textIndentPx) / charWidth);
-            
-            let totalLines = 0;
-            if (isList) {
-              const listWidthPx = widthPx - 32;
-              const listCharsPerLine = Math.floor(listWidthPx / charWidth);
-              totalLines = Math.ceil(charCount / listCharsPerLine) || 1;
-            } else {
-              if (charCount <= firstLineChars) {
-                totalLines = 1;
-              } else {
-                totalLines = 1 + Math.ceil((charCount - firstLineChars) / charsPerLine);
-              }
-            }
-            
-            if (linesFit >= 1 && totalLines > linesFit) {
-              // Split paragraph text
-              const { part1, part2 } = splitParagraphText(el.text, linesFit, widthPx, layout, isList);
-              if (part1.trim() && part2.trim()) {
-                const elPart1 = { ...el, text: part1 };
-                const elPart2 = { ...el, text: part2, noIndent: true, isListContinuation: isList };
-                
-                // Add Part 1 to current page
-                currentPage.push(elPart1);
-                pages.push(currentPage);
-                
-                // Start a new page for Part 2
-                currentPage = [];
-                currentHeight = 0;
-                
-                // Insert Part 2 into subElements right after the current element so it is processed in the next iteration
-                subElements.splice(elIdx + 1, 0, elPart2);
-                
-                elIdx++;
-                continue;
-              }
-            }
-          }
-          
-          // If not split, push current page and start a new page with the whole element
-          pages.push(currentPage);
-          currentPage = [el];
-          currentHeight = h;
-        } else {
-          currentPage.push(el);
-          currentHeight += h;
-        }
-        elIdx++;
-      }
-      
-      if (currentPage.length > 0) {
-        pages.push(currentPage);
-      }
-      if (pages.length === 0) {
-        pages.push([]);
-      }
-      
-      map[babKey] = pages;
-    });
-    return map;
   };
 
   const getBlockPageNumber = (babKey, blockId) => {
@@ -2609,44 +1999,9 @@ export default function Index() {
   const setTables = () => {};
   const setFigures = () => {};
 
-  // Paginate a simple list of entries ({ title }) like DAFTAR ISI does, so DAFTAR
-  // TABEL / GAMBAR / RUMUS flow onto multiple pages instead of overflowing.
-  const paginateListEntries = (entries) => {
-    const pages = [];
-    const contentHeightCm = 29.7 - layout.marginTop - layout.marginBottom;
-    const isDoubleSpacing = layout.lineSpacing === '2.0';
-    const lineHeightCm = isDoubleSpacing ? 0.85 : 0.65;
-    const firstPageAvailableHeight = contentHeightCm - 2.2; // title occupies ~2.2cm
-    const nextPageAvailableHeight = contentHeightCm;
-    let currentPage = [];
-    let currentHeight = 0;
-    let isFirstPage = true;
-    entries.forEach(entry => {
-      let lines = 1;
-      const titleLen = (entry.title || '').length;
-      const printableWidthCm = 21.0 - layout.marginLeft - layout.marginRight;
-      const charsPerLine = Math.max(30, Math.floor(printableWidthCm / 0.18));
-      if (titleLen > charsPerLine) lines = Math.ceil(titleLen / charsPerLine);
-      const entryHeight = (lines * lineHeightCm) + 0.21;
-      const maxHeight = isFirstPage ? firstPageAvailableHeight : nextPageAvailableHeight;
-      if (currentHeight + entryHeight > maxHeight && currentPage.length > 0) {
-        pages.push(currentPage);
-        currentPage = [entry];
-        currentHeight = entryHeight;
-        isFirstPage = false;
-      } else {
-        currentPage.push(entry);
-        currentHeight += entryHeight;
-      }
-    });
-    if (currentPage.length > 0) pages.push(currentPage);
-    if (pages.length === 0) pages.push([]); // always render at least one page
-    return pages;
-  };
-
-  const getTableListPages = () => paginateListEntries(tables);
-  const getFigureListPages = () => paginateListEntries(figures);
-  const getEquationListPages = () => paginateListEntries(equations);
+  const getTableListPages = () => paginateListEntries(tables, layout);
+  const getFigureListPages = () => paginateListEntries(figures, layout);
+  const getEquationListPages = () => paginateListEntries(equations, layout);
 
   // Table editor inputs
   const [tableInput, setTableInput] = useState({ title: '', bab: 'bab3', headers: '', rowsText: '' });
@@ -2803,17 +2158,7 @@ export default function Index() {
           autosaveConfirmedRef.current = saveFilename;
         }
         try {
-          const response = await fetch('/thesis/save', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-CSRF-TOKEN': getCsrfToken()
-            },
-            body: JSON.stringify({
-              filename: saveFilename,
-              draft_data: draftPayload
-            })
-          });
+          const response = await saveDraftRequest(saveFilename, draftPayload);
           const result = await response.json();
           if (response.ok && result.success) {
             lastSavedPayloadRef.current = payloadString;
@@ -3290,14 +2635,7 @@ export default function Index() {
     }
 
     try {
-      const response = await fetch('/thesis/parse-guide', {
-        method: 'POST',
-        headers: {
-          'Accept': 'application/json',
-          'X-XSRF-TOKEN': getCsrfToken()
-        },
-        body: formData
-      });
+      const response = await parseGuideRequest(formData);
 
       const resData = await response.json();
       if (!response.ok) {
@@ -3358,17 +2696,10 @@ export default function Index() {
     setSuggestedTitles([]);
     showToast('Mencari rekomendasi judul dan metode...');
     try {
-      const response = await fetch('/thesis/recommend-titles', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Gemini-Key': apiKey
-        },
-        body: JSON.stringify({
-          fakultas: aiInputs.fakultas,
-          prodi: aiInputs.prodi,
-          topik: aiInputs.topik
-        })
+      const response = await recommendTitlesRequest(apiKey, {
+        fakultas: aiInputs.fakultas,
+        prodi: aiInputs.prodi,
+        topik: aiInputs.topik,
       });
       const data = await response.json();
       if (!response.ok) {
@@ -3460,7 +2791,7 @@ export default function Index() {
     }, 200);
   };
 
-  const executeWordExport = (pageIds, filename) => {
+  const executeWordExport = async (pageIds, filename) => {
     let combinedHtml = '';
     
     const cleanFontFamily = layout.fontFamily ? layout.fontFamily.split(',')[0].replace(/['"]/g, "").trim() : 'Times New Roman';
@@ -3485,46 +2816,13 @@ export default function Index() {
     // pixel-estimated page splits (which fragment paragraphs and lists).
     // ==========================================================================
     const buildTableWordHtml = (sec) => {
-      const normHeaders = normalizeHeaders(sec.headers);
-      const normRows = normalizeTableRows(sec.rows);
-      const headersMask = computeMaskedHeaders(normHeaders);
-      const rowsMask = computeMaskedCells(normRows);
-      const tableSpacingNum = parseFloat(layout.tableLineSpacing || '1.0');
-      const tableWordLineHeight = Math.round(tableSpacingNum * 100) + '%';
-      let h = `<div style="margin-top:12pt; margin-bottom:12pt; text-indent:0cm;">`;
-      h += `<p style="font-weight:bold; font-size:11pt; text-align:left; text-indent:0cm; margin:0 0 6pt 0; font-family:${cleanFontFamily};">${italicizeEnglishWordsText(sec.title || 'Tabel')}</p>`;
-      h += `<table border="1" cellspacing="0" cellpadding="5" style="border-collapse:collapse; width:100%; border:1px solid #000;">`;
-      
-      // Use thead wrapper for MS Word to automatically repeat headers on page breaks
-      h += '<thead><tr>';
-      normHeaders.forEach((hd, i) => {
-        if (headersMask[i]) return;
-        const isNoCol = (hd.text || '').toLowerCase() === 'no';
-        const bg = hd.bgColor ? ` bgcolor="${hd.bgColor}"` : '';
-        const colspan = hd.colSpan && hd.colSpan > 1 ? ` colspan="${hd.colSpan}"` : '';
-        const rowspan = hd.rowSpan && hd.rowSpan > 1 ? ` rowspan="${hd.rowSpan}"` : '';
-        const bgStyle = hd.bgColor ? `background-color:${hd.bgColor};` : '';
-        h += `<td${colspan}${rowspan}${bg} style="border:1px solid #000; padding:6px; font-weight:bold; vertical-align:top; text-align:${isNoCol ? 'center' : (layout.tableTextAlign || 'left')}; font-family:${cleanFontFamily}; font-size:${baseFontSize}; line-height:${tableWordLineHeight}; ${bgStyle}">${italicizeEnglishWordsText(hd.text)}</td>`;
+      return buildWordTableHtml({
+        section: sec,
+        layout,
+        cleanFontFamily,
+        baseFontSize,
+        formatText: italicizeEnglishWordsText,
       });
-      h += '</tr></thead>';
-      
-      h += '<tbody>';
-      normRows.forEach((row, rIdx) => {
-        h += '<tr>';
-        row.forEach((cell, cIdx) => {
-          if (rowsMask[rIdx] && rowsMask[rIdx][cIdx]) return;
-          const headerCell = normHeaders[cIdx];
-          const isNoCol = headerCell && (headerCell.text || '').toLowerCase() === 'no';
-          const bg = cell.bgColor ? ` bgcolor="${cell.bgColor}"` : '';
-          const colspan = cell.colSpan && cell.colSpan > 1 ? ` colspan="${cell.colSpan}"` : '';
-          const rowspan = cell.rowSpan && cell.rowSpan > 1 ? ` rowspan="${cell.rowSpan}"` : '';
-          const bgStyle = cell.bgColor ? `background-color:${cell.bgColor};` : '';
-          h += `<td${colspan}${rowspan}${bg} style="border:1px solid #000; padding:6px; vertical-align:top; text-align:${isNoCol ? 'center' : (layout.tableTextAlign || 'left')}; font-family:${cleanFontFamily}; font-size:${baseFontSize}; line-height:${tableWordLineHeight}; ${bgStyle}">${italicizeEnglishWordsText(cell.text)}</td>`;
-        });
-        h += '</tr>';
-      });
-      h += '</tbody></table></div>';
-      return h;
     };
 
     const buildFigureWordHtml = (sec) => {
@@ -3683,6 +2981,12 @@ export default function Index() {
 
         combinedHtml += sectionTransition(pageId);
         combinedHtml += `<div class="word-page">${buildChapterWordContent(babKey)}</div>`;
+        return;
+      }
+
+      if (pageId === 'cover') {
+        combinedHtml += sectionTransition(pageId);
+        combinedHtml += `<div class="word-page">${buildCoverWordHtml({ coverElements, cleanFontFamily })}</div>`;
         return;
       }
 
@@ -4233,16 +3537,7 @@ export default function Index() {
       </html>
     `;
 
-    const blob = new Blob(['\ufeff' + docHtml], {
-      type: 'application/msword;charset=utf-8'
-    });
-    
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = filename.endsWith('.doc') || filename.endsWith('.docx') ? filename : `${filename}.doc`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    await downloadHtmlAsDocx(docHtml, filename, layout);
   };
 
   const handleStartExport = () => {
@@ -4284,7 +3579,10 @@ export default function Index() {
               const filename = `${cleanAuthor}_${cleanSecName}`;
               
               setTimeout(() => {
-                executeWordExport(secPages, filename);
+                executeWordExport(secPages, filename).catch((error) => {
+                  console.error('DOCX export failed:', error);
+                  showToast("Gagal membuat file DOCX.", true);
+                });
               }, delay);
               delay += 250;
             }
@@ -4292,8 +3590,12 @@ export default function Index() {
           showToast("Unduhan terpisah DOCX dimulai!");
         } else {
           const filename = `${cleanAuthor}_${cleanTitle}_Lengkap`;
-          executeWordExport(targetPageIds, filename);
-          showToast("Unduhan DOCX berhasil!");
+          executeWordExport(targetPageIds, filename)
+            .then(() => showToast("Unduhan DOCX berhasil!"))
+            .catch((error) => {
+              console.error('DOCX export failed:', error);
+              showToast("Gagal membuat file DOCX.", true);
+            });
         }
       } else {
         // PDF format
@@ -4411,6 +3713,11 @@ export default function Index() {
     const newLayout = { ...layout, [key]: val, preset: 'custom' };
     setLayout(newLayout);
     saveLocalDraft({ layout: newLayout });
+  };
+
+  const handleHeadingStylesChange = (updated) => {
+    setHeadingStyles(updated);
+    saveLocalDraft({ headingStyles: updated });
   };
 
   // Roman numeral converter (optimized & crash-safe)
@@ -4657,17 +3964,10 @@ export default function Index() {
     showToast('Mencari referensi di database Google Scholar / ResearchGate...');
 
     try {
-      const response = await fetch('/thesis/search-citation', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Gemini-Key': apiKey
-        },
-        body: JSON.stringify({ 
-          query: scholarQuery,
-          year_start: scholarYearStart,
-          year_end: scholarYearEnd
-        })
+      const response = await searchCitationRequest(apiKey, {
+        query: scholarQuery,
+        yearStart: scholarYearStart,
+        yearEnd: scholarYearEnd,
       });
 
       const resData = await response.json();
@@ -4923,6 +4223,62 @@ export default function Index() {
   // DOCX IMPORT LOGIC
   // ==========================================================================
 
+  const restoreDraftSnapshot = async (snapshot, filename, isCreateNew) => {
+    if (!snapshot || !snapshot.__skripsi) return false;
+
+    if (snapshot.layout) setLayout(snapshot.layout);
+    if (snapshot.cover) setCover(snapshot.cover);
+    if (snapshot.coverElements) setCoverElements(snapshot.coverElements);
+    if (snapshot.babSections) setBabSections(snapshot.babSections);
+    if (snapshot.babTitles) setBabTitles(snapshot.babTitles);
+    if (Array.isArray(snapshot.references)) setReferences(snapshot.references);
+    if (snapshot.refStyle) setRefStyle(snapshot.refStyle);
+    if (typeof snapshot.abstrakIndo === 'string') setAbstrakIndo(snapshot.abstrakIndo);
+    if (typeof snapshot.abstrakIndoKeywords === 'string') setAbstrakIndoKeywords(snapshot.abstrakIndoKeywords);
+    if (typeof snapshot.abstrakEng === 'string') setAbstrakEng(snapshot.abstrakEng);
+    if (typeof snapshot.abstrakEngKeywords === 'string') setAbstrakEngKeywords(snapshot.abstrakEngKeywords);
+    if (snapshot.headingStyles) setHeadingStyles(snapshot.headingStyles);
+
+    const restoredState = {
+      layout: snapshot.layout || layout,
+      cover: snapshot.cover || cover,
+      coverElements: snapshot.coverElements || coverElements,
+      babSections: snapshot.babSections || babSections,
+      babTitles: snapshot.babTitles || babTitles,
+      references: Array.isArray(snapshot.references) ? snapshot.references : [],
+      refStyle: snapshot.refStyle || refStyle,
+      tables: getAllTables(snapshot.babSections || babSections),
+      figures: getAllFigures(snapshot.babSections || babSections),
+      abstrakIndo: snapshot.abstrakIndo || '',
+      abstrakIndoKeywords: snapshot.abstrakIndoKeywords || '',
+      abstrakEng: snapshot.abstrakEng || '',
+      abstrakEngKeywords: snapshot.abstrakEngKeywords || '',
+      headingStyles: snapshot.headingStyles || headingStyles
+    };
+
+    saveLocalDraft(restoredState);
+    setHasLocalDraft(true);
+    setShowWelcomeModal(false);
+    setShowDraftManager(false);
+
+    if (isCreateNew) {
+      try {
+        await saveDraftRequest(filename, restoredState);
+        setSaveFilename(filename);
+        autosaveConfirmedRef.current = filename;
+        fetchDraftsList();
+      } catch (dbErr) {
+        console.warn('Snapshot imported locally, but DB draft save failed:', dbErr);
+      }
+    } else {
+      setSaveFilename('Draft_Skripsi');
+      autosaveConfirmedRef.current = null;
+    }
+
+    lastSavedPayloadRef.current = '';
+    return true;
+  };
+
   const handleDocxImport = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -5008,11 +4364,33 @@ export default function Index() {
 
       let html;
       let docLayoutSettings = {};
+      let docHeadingStyles = {};
       if (isZipDocx) {
+        const snapshot = await extractDocxSnapshot(arrayBuffer);
+        if (snapshot) {
+          const restored = await restoreDraftSnapshot(snapshot, newFilename, isCreateNew);
+          if (restored) {
+            showToast('Impor berhasil - seluruh format & isi draft dipulihkan dari snapshot DOCX!');
+            e.target.value = '';
+            return;
+          }
+        }
+
+        const extractedDocxLayout = await extractDocxLayout(arrayBuffer);
+        docLayoutSettings = extractedDocxLayout.layout || {};
+        docHeadingStyles = extractedDocxLayout.headingStyles || {};
+
         // Real .docx (OOXML) — parse with mammoth.
         // Loaded on demand so the ~1MB mammoth library stays out of the main bundle.
         const { default: mammoth } = await import('mammoth');
-        const result = await mammoth.convertToHtml({ arrayBuffer });
+        const result = await mammoth.convertToHtml(
+          { arrayBuffer },
+          {
+            styleMap: DOCX_MAMMOTH_STYLE_MAP,
+            includeDefaultStyleMap: true,
+            ignoreEmptyParagraphs: false,
+          }
+        );
         html = result.value;
       } else {
         // HTML-based .doc (our own export) — decode the text and use its HTML directly
@@ -5023,6 +4401,16 @@ export default function Index() {
 
         // FAST PATH: our exports embed a full draft snapshot. If present, restore the
         // entire draft (title, logo, images, page breaks, layout) with perfect fidelity.
+        const snapshot = extractDraftSnapshotFromHtml(rawHtml);
+        if (snapshot) {
+          const restored = await restoreDraftSnapshot(snapshot, newFilename, isCreateNew);
+          if (restored) {
+            showToast('Impor berhasil - seluruh format & isi draft dipulihkan dari snapshot!');
+            e.target.value = '';
+            return;
+          }
+        }
+
         const snapMatch = rawHtml.match(/<!--SKRIPSI_DRAFT_V2:([A-Za-z0-9+/=]+)-->/);
         if (snapMatch) {
           try {
@@ -5065,11 +4453,7 @@ export default function Index() {
 
               if (isCreateNew) {
                 try {
-                  await fetch('/thesis/save', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': getCsrfToken() },
-                    body: JSON.stringify({ filename: newFilename, draft_data: restoredState })
-                  });
+                  await saveDraftRequest(newFilename, restoredState);
                   setSaveFilename(newFilename);
                   autosaveConfirmedRef.current = newFilename;
                   fetchDraftsList();
@@ -5793,6 +5177,20 @@ export default function Index() {
       
       const updatedLayout = { ...layout, ...docLayoutSettings };
       setLayout(updatedLayout);
+      const updatedHeadingStyles = Object.keys(docHeadingStyles).length > 0
+        ? {
+            ...headingStyles,
+            ...Object.fromEntries(
+              Object.entries(docHeadingStyles).map(([key, value]) => [
+                key,
+                { ...(headingStyles[key] || {}), ...value },
+              ])
+            ),
+          }
+        : headingStyles;
+      if (updatedHeadingStyles !== headingStyles) {
+        setHeadingStyles(updatedHeadingStyles);
+      }
       
       if (isCreateNew) {
         saveLocalDraft({ 
@@ -5801,7 +5199,8 @@ export default function Index() {
           cover: updatedCover,
           coverElements: importedCoverElements,
           babTitles: newBabTitles,
-          layout: updatedLayout
+          layout: updatedLayout,
+          headingStyles: updatedHeadingStyles
         });
       } else {
         saveLocalDraft({ 
@@ -5809,7 +5208,8 @@ export default function Index() {
           cover: updatedCover,
           coverElements: importedCoverElements,
           babTitles: newBabTitles,
-          layout: updatedLayout
+          layout: updatedLayout,
+          headingStyles: updatedHeadingStyles
         });
       }
       setHasLocalDraft(true);
@@ -5832,19 +5232,10 @@ export default function Index() {
           abstrakIndoKeywords, 
           abstrakEng, 
           abstrakEngKeywords, 
-          headingStyles
+          headingStyles: updatedHeadingStyles
         };
         try {
-          const response = await fetch('/thesis/save', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              filename: newFilename,
-              draft_data: draftPayload
-            })
-          });
+          const response = await saveDraftRequest(newFilename, draftPayload);
           const result = await response.json();
           if (response.ok && result.success) {
             setSaveFilename(newFilename);
@@ -5887,16 +5278,7 @@ export default function Index() {
     showToast("Sedang menyimpan draft...");
 
     try {
-      const response = await fetch('/thesis/save', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          filename: saveFilename,
-          draft_data: draftPayload
-        })
-      });
+      const response = await saveDraftRequest(saveFilename, draftPayload);
 
       const result = await response.json();
       if (response.ok && result.success) {
@@ -5914,13 +5296,7 @@ export default function Index() {
   const handleLoadDraftDB = async (item) => {
     showToast(`Memuat draft "${item.title}"...`);
     try {
-      const response = await fetch('/thesis/load', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ id: String(item.id), source: item.source })
-      });
+      const response = await loadDraftRequest(item.id, item.source);
 
       if (response.ok) {
         const data = await response.json();
@@ -6070,7 +5446,7 @@ export default function Index() {
   const fetchDraftsList = async () => {
     setLoadingDrafts(true);
     try {
-      const response = await fetch('/thesis/list');
+      const response = await listDraftsRequest();
       if (response.ok) {
         const list = await response.json();
         setDraftsList(list);
@@ -6087,14 +5463,7 @@ export default function Index() {
     if (!confirm(`Hapus draft "${item.title}" permanen?`)) return;
 
     try {
-      const response = await fetch('/thesis/delete', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CSRF-TOKEN': getCsrfToken()
-        },
-        body: JSON.stringify({ id: String(item.id), source: item.source })
-      });
+      const response = await deleteDraftRequest(item.id, item.source);
 
       if (response.ok) {
         const result = await response.json().catch(() => ({ success: true }));
@@ -6121,6 +5490,22 @@ export default function Index() {
     setShowAiPromptModal(true);
   };
 
+  const closeAiPromptModal = () => {
+    setShowAiPromptModal(false);
+    setAiPromptTarget(null);
+  };
+
+  const generateAiPromptTarget = (prompt = '') => {
+    const target = aiPromptTarget;
+    closeAiPromptModal();
+    if (!target) return;
+    if (target.legacyKey) {
+      handleAIGenerateSection(target.legacyKey, target.displayTitle, prompt);
+    } else {
+      handleAIGenerateDynamic(target.babKey, target.id, target.displayTitle, prompt);
+    }
+  };
+
   const handleAIGenerateSection = async (sectionKey, displayTitle, additionalPrompt = '') => {
     if (!apiKey) {
       showToast('Masukkan API Key Gemini terlebih dahulu!', true);
@@ -6133,22 +5518,15 @@ export default function Index() {
     showToast(`Menghubungi Gemini untuk draf ${displayTitle}...`);
 
     try {
-      const response = await fetch('/thesis/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Gemini-Key': apiKey
-        },
-        body: JSON.stringify({
-          title: cover.title,
-          section: sectionKey,
-          topik: aiInputs.topik,
-          metode: tables.length > 0 ? 'Fuzzy/KNN/PLS-SEM' : 'Metode Deskriptif',
-          ai_write_style: sectionKey === 'latar_belakang' ? backgroundStyle : 'direct',
-          year_start: scholarYearStart,
-          year_end: scholarYearEnd,
-          additional_prompt: additionalPrompt
-        })
+      const response = await generateSectionRequest(apiKey, {
+        title: cover.title,
+        section: sectionKey,
+        topik: aiInputs.topik,
+        metode: tables.length > 0 ? 'Fuzzy/KNN/PLS-SEM' : 'Metode Deskriptif',
+        ai_write_style: sectionKey === 'latar_belakang' ? backgroundStyle : 'direct',
+        year_start: scholarYearStart,
+        year_end: scholarYearEnd,
+        additional_prompt: additionalPrompt,
       });
 
       const resData = await response.json();
@@ -6249,21 +5627,14 @@ export default function Index() {
     const babContext = currentBab ? `${currentBab.prefix} (${currentBab.title})` : `BAB ${babKey.replace('bab', '')}`;
 
     try {
-      const response = await fetch('/thesis/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Gemini-Key': apiKey
-        },
-        body: JSON.stringify({
-          title: cover.title,
-          section: '__dynamic__',
-          section_title: sectionTitle,
-          bab_context: babContext,
-          topik: aiInputs.topik,
-          metode: tables.length > 0 ? 'Fuzzy/KNN/PLS-SEM' : 'Metode Deskriptif',
-          additional_prompt: additionalPrompt
-        })
+      const response = await generateSectionRequest(apiKey, {
+        title: cover.title,
+        section: '__dynamic__',
+        section_title: sectionTitle,
+        bab_context: babContext,
+        topik: aiInputs.topik,
+        metode: tables.length > 0 ? 'Fuzzy/KNN/PLS-SEM' : 'Metode Deskriptif',
+        additional_prompt: additionalPrompt,
       });
 
       const resData = await response.json();
@@ -6366,411 +5737,32 @@ export default function Index() {
 
           {/* Scrollable inputs space */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4 text-xs">
-            
-            {/* TAB 1: LAYOUT SETTINGS */}
-            {activeTab === 'layout' && (
-              <div className="space-y-4">
-                {/* Custom Guidelines File Upload */}
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
-                  <h3 className="font-bold text-slate-400 mb-1 uppercase text-[10px] flex items-center gap-1.5"><FolderOpen className="h-3.5 w-3.5 text-indigo-500" /> Unggah Panduan Format (.pdf/.docx/.doc/.txt)</h3>
-                  <p className="text-[9px] text-slate-400">Pindai panduan kampus secara otomatis untuk menyesuaikan margin, spasi, dan font.</p>
-                  <input type="file" accept=".pdf,.docx,.doc,.txt,.md" onChange={handleFileUpload} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-[10px]" />
-                </div>
+            <LayoutSettingsPanel
+              show={activeTab === 'layout'}
+              layout={layout}
+              autosaveEnabled={autosaveEnabled}
+              selectedHeadingToStyle={selectedHeadingToStyle}
+              headingStyles={headingStyles}
+              onFileUpload={handleFileUpload}
+              onApplyPreset={applyPreset}
+              onLayoutChange={handleLayoutChange}
+              onSelectedHeadingToStyleChange={setSelectedHeadingToStyle}
+              onHeadingStylesChange={handleHeadingStylesChange}
+              onAutosaveEnabledChange={(enabled) => {
+                setAutosaveEnabled(enabled);
+                saveLocalDraftSetting(enabled);
+              }}
+            />
 
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
-                  <h3 className="font-bold text-slate-400 mb-2 uppercase text-[10px]">Preset Format</h3>
-                  <div className="flex gap-2">
-                    <button onClick={() => applyPreset('dikti')} className={`flex-1 py-2 border rounded-lg text-center ${layout.preset === 'dikti' ? 'bg-indigo-500/10 border-indigo-500 text-indigo-500' : 'bg-white dark:bg-slate-950 border-slate-250'}`}>DIKTI 4-4-3-3</button>
-                    <button onClick={() => applyPreset('ringkas')} className={`flex-1 py-2 border rounded-lg text-center ${layout.preset === 'ringkas' ? 'bg-indigo-500/10 border-indigo-500 text-indigo-500' : 'bg-white dark:bg-slate-950 border-slate-250'}`}>Ringkas 3-3-3-3</button>
-                  </div>
-                </div>
-
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-3">
-                  <h3 className="font-bold text-slate-400 uppercase text-[10px]">Margin Kertas A4 (cm)</h3>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div><label className="text-[10px] text-slate-400 block mb-1">Atas</label><input type="number" step="0.5" value={layout.marginTop} onChange={e=>handleLayoutChange('marginTop', parseFloat(e.target.value)||0)} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg" /></div>
-                    <div><label className="text-[10px] text-slate-400 block mb-1">Kiri</label><input type="number" step="0.5" value={layout.marginLeft} onChange={e=>handleLayoutChange('marginLeft', parseFloat(e.target.value)||0)} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg" /></div>
-                    <div><label className="text-[10px] text-slate-400 block mb-1">Bawah</label><input type="number" step="0.5" value={layout.marginBottom} onChange={e=>handleLayoutChange('marginBottom', parseFloat(e.target.value)||0)} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg" /></div>
-                    <div><label className="text-[10px] text-slate-400 block mb-1">Kanan</label><input type="number" step="0.5" value={layout.marginRight} onChange={e=>handleLayoutChange('marginRight', parseFloat(e.target.value)||0)} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg" /></div>
-                  </div>
-                </div>
-
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-3">
-                  <h3 className="font-bold text-slate-400 uppercase text-[10px]">Penomoran & Tipografi</h3>
-                  
-                  <div>
-                    <label className="text-[10px] text-slate-400 block mb-1">Metode Letak Halaman</label>
-                    <select value={layout.pageNumPosition} onChange={e=>handleLayoutChange('pageNumPosition', e.target.value)} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg">
-                      <option value="flexible">Standar Akademik (Bab Bawah Tengah, Lainnya Atas Kanan)</option>
-                      <option value="bottom-center">Tetap Bawah Tengah</option>
-                      <option value="bottom-right">Tetap Bawah Kanan</option>
-                    </select>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-[10px] text-slate-400 block mb-1">Font Utama</label>
-                      <select value={layout.fontFamily} onChange={e=>handleLayoutChange('fontFamily', e.target.value)} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg">
-                        <option value="'Times New Roman', Times, serif">Times New Roman</option>
-                        <option value="Arial, Helvetica, sans-serif">Arial</option>
-                        <option value="Georgia, serif">Georgia</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-slate-400 block mb-1">Spasi</label>
-                      <select value={layout.lineSpacing} onChange={e=>handleLayoutChange('lineSpacing', e.target.value)} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg">
-                        <option value="1.5">1.5</option>
-                        <option value="2.0">2.0 (Double)</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-[10px] text-slate-400 block mb-1">Spasi Tabel</label>
-                      <select value={layout.tableLineSpacing || '1.0'} onChange={e=>handleLayoutChange('tableLineSpacing', e.target.value)} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg text-xs">
-                        <option value="1.0">1.0 (Single)</option>
-                        <option value="1.15">1.15</option>
-                        <option value="1.5">1.5</option>
-                        <option value="2.0">2.0</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-slate-400 block mb-1">Rata Teks Tabel</label>
-                      <select value={layout.tableTextAlign || 'left'} onChange={e=>handleLayoutChange('tableTextAlign', e.target.value)} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg text-xs">
-                        <option value="left">Rata Kiri</option>
-                        <option value="center">Rata Tengah</option>
-                        <option value="right">Rata Kanan</option>
-                        <option value="justify">Rata Kiri-Kanan</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] text-slate-400 block mb-1">Format Indentasi Paragraf</label>
-                    <select value={layout.paragraphIndent} onChange={e=>handleLayoutChange('paragraphIndent', e.target.value)} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg">
-                      <option value="indented">Menjorok Kedalam (1.25cm)</option>
-                      <option value="flush">Rata Kiri Penuh (0cm - Tanpa Indent)</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Gaya Heading / Sub-Bab H1-H6 */}
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-3">
-                  <h3 className="font-bold text-slate-400 uppercase text-[10px] flex items-center gap-1.5"><List className="h-3.5 w-3.5 text-indigo-500" /> Gaya Heading / Sub-Bab</h3>
-                  
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[10px] text-slate-400 block mb-1">Heading</label>
-                      <select 
-                        value={selectedHeadingToStyle} 
-                        onChange={e => setSelectedHeadingToStyle(e.target.value)} 
-                        className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
-                      >
-                        <option value="h1">Heading 1 (Bab)</option>
-                        <option value="h2">Heading 2 (Sub-Bab 1)</option>
-                        <option value="h3">Heading 3 (Sub-Bab 2)</option>
-                        <option value="h4">Heading 4 (Sub-Bab 3)</option>
-                        <option value="h5">Heading 5 (Sub-Bab 4)</option>
-                        <option value="h6">Heading 6 (Sub-Bab 5)</option>
-                      </select>
-                    </div>
-                    
-                    <div>
-                      <label className="text-[10px] text-slate-400 block mb-1">Ukuran Font</label>
-                      <select 
-                        value={headingStyles[selectedHeadingToStyle]?.fontSize || '12pt'} 
-                        onChange={e => {
-                          const updated = {
-                            ...headingStyles,
-                            [selectedHeadingToStyle]: {
-                              ...headingStyles[selectedHeadingToStyle],
-                              fontSize: e.target.value
-                            }
-                          };
-                          setHeadingStyles(updated);
-                          saveLocalDraft({ headingStyles: updated });
-                        }} 
-                        className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
-                      >
-                        <option value="9pt">9 pt</option>
-                        <option value="10pt">10 pt</option>
-                        <option value="11pt">11 pt</option>
-                        <option value="12pt">12 pt</option>
-                        <option value="13pt">13 pt</option>
-                        <option value="14pt">14 pt</option>
-                        <option value="15pt">15 pt</option>
-                        <option value="16pt">16 pt</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="text-[10px] text-slate-400 block mb-1">Ketebalan</label>
-                      <select 
-                        value={headingStyles[selectedHeadingToStyle]?.fontWeight || 'bold'} 
-                        onChange={e => {
-                          const updated = {
-                            ...headingStyles,
-                            [selectedHeadingToStyle]: {
-                              ...headingStyles[selectedHeadingToStyle],
-                              fontWeight: e.target.value
-                            }
-                          };
-                          setHeadingStyles(updated);
-                          saveLocalDraft({ headingStyles: updated });
-                        }} 
-                        className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
-                      >
-                        <option value="bold">Tebal</option>
-                        <option value="normal">Normal</option>
-                      </select>
-                    </div>
-                    
-                    <div>
-                      <label className="text-[10px] text-slate-400 block mb-1">Gaya Font</label>
-                      <select 
-                        value={headingStyles[selectedHeadingToStyle]?.fontStyle || 'normal'} 
-                        onChange={e => {
-                          const updated = {
-                            ...headingStyles,
-                            [selectedHeadingToStyle]: {
-                              ...headingStyles[selectedHeadingToStyle],
-                              fontStyle: e.target.value
-                            }
-                          };
-                          setHeadingStyles(updated);
-                          saveLocalDraft({ headingStyles: updated });
-                        }} 
-                        className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
-                      >
-                        <option value="normal">Tegak</option>
-                        <option value="italic">Miring</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="text-[10px] text-slate-400 block mb-1">Kapital</label>
-                      <select 
-                        value={headingStyles[selectedHeadingToStyle]?.uppercase ? 'true' : 'false'} 
-                        onChange={e => {
-                          const isUpper = e.target.value === 'true';
-                          const updated = {
-                            ...headingStyles,
-                            [selectedHeadingToStyle]: {
-                              ...headingStyles[selectedHeadingToStyle],
-                              uppercase: isUpper
-                            }
-                          };
-                          setHeadingStyles(updated);
-                          saveLocalDraft({ headingStyles: updated });
-                        }} 
-                        className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
-                      >
-                        <option value="true">Kapital</option>
-                        <option value="false">Normal</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] text-slate-400 block mb-1">Perataan Teks</label>
-                    <select 
-                      value={headingStyles[selectedHeadingToStyle]?.textAlign || 'left'} 
-                      onChange={e => {
-                        const updated = {
-                          ...headingStyles,
-                          [selectedHeadingToStyle]: {
-                            ...headingStyles[selectedHeadingToStyle],
-                            textAlign: e.target.value
-                          }
-                        };
-                        setHeadingStyles(updated);
-                        saveLocalDraft({ headingStyles: updated });
-                      }} 
-                      className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
-                    >
-                      <option value="left">Rata Kiri</option>
-                      <option value="center">Rata Tengah</option>
-                      <option value="right">Rata Kanan</option>
-                      <option value="justify">Rata Kiri Kanan</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Optional Academic Pages Toggle */}
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
-                  <h3 className="font-bold text-slate-400 uppercase text-[10px]">Halaman Administratif & Abstrak</h3>
-                  <div className="flex flex-col gap-1.5 text-[10px] text-slate-300">
-                    <label className="flex items-center gap-2 cursor-pointer p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800">
-                      <input type="checkbox" checked={layout.showPersetujuan} onChange={e=>handleLayoutChange('showPersetujuan', e.target.checked)} className="rounded text-indigo-600 focus:ring-indigo-500" />
-                      <span>Lembar Persetujuan Pembimbing</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800">
-                      <input type="checkbox" checked={layout.showPengesahan} onChange={e=>handleLayoutChange('showPengesahan', e.target.checked)} className="rounded text-indigo-600 focus:ring-indigo-500" />
-                      <span>Lembar Pengesahan Sidang</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800">
-                      <input type="checkbox" checked={layout.showPernyataan} onChange={e=>handleLayoutChange('showPernyataan', e.target.checked)} className="rounded text-indigo-600 focus:ring-indigo-500" />
-                      <span>Pernyataan Orisinalitas</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800">
-                      <input type="checkbox" checked={layout.showAbstractIndo} onChange={e=>handleLayoutChange('showAbstractIndo', e.target.checked)} className="rounded text-indigo-600 focus:ring-indigo-500" />
-                      <span>Abstrak Bahasa Indonesia</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800">
-                      <input type="checkbox" checked={layout.showAbstractEng} onChange={e=>handleLayoutChange('showAbstractEng', e.target.checked)} className="rounded text-indigo-600 focus:ring-indigo-500" />
-                      <span>Abstract English</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800">
-                      <input type="checkbox" checked={layout.showDaftarRumus} onChange={e=>handleLayoutChange('showDaftarRumus', e.target.checked)} className="rounded text-indigo-600 focus:ring-indigo-500" />
-                      <span>Daftar Rumus (Persamaan)</span>
-                    </label>
-                  </div>
-                </div>
-
-                {/* Auto Save Settings */}
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
-                  <h3 className="font-bold text-slate-400 uppercase text-[10px]">Penyimpanan & Auto Save</h3>
-                  <div className="flex flex-col gap-1.5 text-[10px] text-slate-350">
-                    <label className="flex items-center gap-2 cursor-pointer p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-850">
-                      <input 
-                        type="checkbox" 
-                        checked={autosaveEnabled} 
-                        onChange={e => {
-                          setAutosaveEnabled(e.target.checked);
-                          saveLocalDraftSetting(e.target.checked);
-                        }} 
-                        className="rounded text-indigo-600 focus:ring-indigo-500" 
-                      />
-                      <span>Aktifkan Simpan Otomatis (Auto Save) ke Server</span>
-                    </label>
-                    <p className="text-[8.5px] text-slate-400 pl-6 leading-snug">
-                      Menyimpan perubahan draf ke database setiap 2 detik secara otomatis jika terdeteksi adanya perubahan.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* TAB 5: NAVIGATION OUTLINE */}
-            {activeTab === 'navigasi' && (
-              <div className="space-y-4">
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
-                  <h3 className="font-bold text-slate-400 uppercase text-[10px] mb-2 flex items-center gap-1.5"><Compass className="h-3.5 w-3.5 text-indigo-500" /> Navigasi Dokumen</h3>
-                  
-                  <div className="flex bg-slate-100 dark:bg-slate-950 p-1 gap-1 rounded-lg text-[10px] font-bold">
-                    <button 
-                      onClick={() => setActiveNavTab('pages')} 
-                      className={`flex-1 py-1.5 rounded-md text-center transition-all ${activeNavTab === 'pages' ? 'bg-white dark:bg-slate-900 text-indigo-500 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
-                    >
-                      Halaman
-                    </button>
-                    <button 
-                      onClick={() => setActiveNavTab('headings')} 
-                      className={`flex-1 py-1.5 rounded-md text-center transition-all ${activeNavTab === 'headings' ? 'bg-white dark:bg-slate-900 text-indigo-500 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
-                    >
-                      Daftar Bab & Judul
-                    </button>
-                  </div>
-                </div>
-
-                {/* Sub-tab 1: Pages List */}
-                {activeNavTab === 'pages' && (
-                  <div className="space-y-1.5 max-h-[55vh] overflow-y-auto pr-1">
-                    {getVisiblePages().map((pageId, idx) => {
-                      const pageNum = getPageNumber(pageId);
-                      let pageTitle = pageId.replace('-', ' ').toUpperCase();
-                      if (pageId === 'cover') pageTitle = 'SAMPUL / COVER';
-                      else if (pageId.startsWith('daftar-isi')) {
-                        const pageNumPart = pageId.split('-')[2] || '1';
-                        pageTitle = `DAFTAR ISI (Bagian ${pageNumPart})`;
-                      } else if (pageId.startsWith('daftar-tabel')) {
-                        const p = pageId.split('-')[2] || '1';
-                        pageTitle = `DAFTAR TABEL (Bagian ${p})`;
-                      } else if (pageId.startsWith('daftar-gambar')) {
-                        const p = pageId.split('-')[2] || '1';
-                        pageTitle = `DAFTAR GAMBAR (Bagian ${p})`;
-                      } else if (pageId.startsWith('daftar-rumus')) {
-                        const p = pageId.split('-')[2] || '1';
-                        pageTitle = `DAFTAR RUMUS (Bagian ${p})`;
-                      } else if (pageId.startsWith('bab')) {
-                        const parts = pageId.split('-');
-                        const babNum = parts[0].replace('bab', '');
-                        const pagePart = parts[1];
-                        pageTitle = `BAB ${babNum.toUpperCase()} - Halaman ${pagePart}`;
-                      }
-
-                      return (
-                        <button
-                          key={pageId}
-                          onClick={() => {
-                            const pageElement = document.getElementById(`page-${pageId}`);
-                            if (pageElement) {
-                              pageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            }
-                          }}
-                          className="w-full text-left p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-indigo-500 hover:bg-indigo-50/10 transition-all flex justify-between items-center text-[11px]"
-                        >
-                          <span className="font-semibold text-slate-700 dark:text-slate-350 truncate">
-                            {idx + 1}. {pageTitle}
-                          </span>
-                          {pageNum && (
-                            <span className="bg-slate-100 dark:bg-slate-800 text-slate-500 px-2 py-0.5 rounded text-[9px] font-bold">
-                              Hal. {pageNum}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Sub-tab 2: Headings List */}
-                {activeNavTab === 'headings' && (
-                  <div className="p-2 bg-slate-50/50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-800 rounded-xl space-y-1 max-h-[55vh] overflow-y-auto pr-1">
-                    {getTocEntries().map((entry, idx) => {
-                      const pageNum = getPageNumber(entry.pageId);
-                      const isChapter = entry.isChapter || entry.isBold;
-                      
-                      let indentStyle = {};
-                      if (entry.indent) {
-                        const rawIndent = parseFloat(entry.indent);
-                        indentStyle = { paddingLeft: `${rawIndent * 0.8}cm` };
-                      }
-
-                      return (
-                        <button
-                          key={idx}
-                          onClick={() => {
-                            const headingId = `heading-${entry.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-                            const headingElement = document.getElementById(headingId);
-                            if (headingElement) {
-                              headingElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            } else {
-                              const pageElement = document.getElementById(`page-${entry.pageId}`);
-                              if (pageElement) {
-                                pageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                              }
-                            }
-                          }}
-                          style={indentStyle}
-                          className={`w-full text-left p-1 rounded hover:bg-indigo-500/10 hover:text-indigo-400 transition-colors flex justify-between items-baseline text-[11px] ${isChapter ? 'font-bold text-slate-800 dark:text-slate-200' : 'text-slate-500 dark:text-slate-400'}`}
-                        >
-                          <span className="truncate flex-1 mr-2" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(entry.title) }} />
-                          {pageNum && (
-                            <span className="text-[9px] text-slate-400 font-mono">
-                              ({pageNum})
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
+            <NavigationPanel
+              show={activeTab === 'navigasi'}
+              activeNavTab={activeNavTab}
+              visiblePages={getVisiblePages()}
+              tocEntries={getTocEntries()}
+              getPageNumber={getPageNumber}
+              formatTocTitle={italicizeEnglishWordsText}
+              onActiveNavTabChange={setActiveNavTab}
+            />
 
             {/* TAB 2: CONTENT EDITOR */}
             {activeTab === 'konten' && (
@@ -8217,378 +7209,72 @@ export default function Index() {
                     </div>
                   </div>
                 )}
-
-                {/* Tables & Figures Manager */}
-                {activeSection === 'elemen' && (
-                  <div className="space-y-4">
-                    {/* Add Table form */}
-                    <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
-                      <h4 className="font-bold text-slate-400 uppercase text-[10px] flex items-center gap-1"><Table className="h-3.5 w-3.5 text-indigo-500" /> Sisipkan Tabel Baru</h4>
-                      <div>
-                        <label className="text-[9px] text-slate-400 block mb-0.5">Judul Tabel (Caption)</label>
-                        <input type="text" value={tableInput.title} onChange={e=>setTableInput(p=>({...p, title:e.target.value}))} placeholder="Contoh: Tabel 3.1 Profil Kuesioner" className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs" />
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="text-[9px] text-slate-400 block mb-0.5">Letak Bab</label>
-                          <select value={tableInput.bab} onChange={e=>setTableInput(p=>({...p, bab:e.target.value}))} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs">
-                            <option value="bab1">{babTitles.bab1.prefix}</option>
-                            <option value="bab3">{babTitles.bab3.prefix}</option>
-                            <option value="bab4">{babTitles.bab4.prefix}</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="text-[9px] text-slate-400 block mb-0.5">Header (Koma Sbg Pembatas)</label>
-                          <input type="text" value={tableInput.headers} onChange={e=>setTableInput(p=>({...p, headers:e.target.value}))} placeholder="No, Nama, Akurasi" className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs" />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="text-[9px] text-slate-400 block mb-0.5">Baris Data (Koma Pembatas Kolom, Newline Pembatas Baris)</label>
-                        <textarea value={tableInput.rowsText} onChange={e=>setTableInput(p=>({...p, rowsText:e.target.value}))} rows={2} placeholder="1, Pengujian A, 90%&#10;2, Pengujian B, 95%" className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs" />
-                      </div>
-                      <button onClick={handleAddTable} className="w-full bg-indigo-600 hover:bg-indigo-700 py-1.5 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1"><Plus className="h-4 w-4" /> Tambah Tabel</button>
-                    </div>
-
-                    {/* Add Figure form */}
-                    <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
-                      <h4 className="font-bold text-slate-400 uppercase text-[10px] flex items-center gap-1"><ImageIcon className="h-3.5 w-3.5 text-indigo-500" /> Sisipkan Gambar Baru</h4>
-                      <div>
-                        <label className="text-[9px] text-slate-400 block mb-0.5">Judul Gambar (Caption)</label>
-                        <input type="text" value={figureInput.title} onChange={e=>setFigureInput(p=>({...p, title:e.target.value}))} placeholder="Contoh: Gambar 3.1 Flowchart" className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs" />
-                      </div>
-                      <div>
-                        <label className="text-[9px] text-slate-400 block mb-0.5">Letak Bab</label>
-                        <select value={figureInput.bab} onChange={e=>setFigureInput(p=>({...p, bab:e.target.value}))} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs">
-                          <option value="bab1">{babTitles.bab1.prefix}</option>
-                          <option value="bab3">{babTitles.bab3.prefix}</option>
-                          <option value="bab4">{babTitles.bab4.prefix}</option>
-                        </select>
-                      </div>
-                      <button onClick={handleAddFigure} className="w-full bg-indigo-600 hover:bg-indigo-700 py-1.5 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1"><Plus className="h-4 w-4" /> Tambah Gambar</button>
-                    </div>
-
-                    {/* List of current tables */}
-                    <div className="p-2 bg-slate-100 dark:bg-slate-950 rounded-xl space-y-1.5 mb-3">
-                      <span className="font-bold text-slate-400 text-[10px] block mb-1">Daftar Tabel Terpasang ({getAllTables().length})</span>
-                      {getAllTables().map(t=>(
-                        <div key={t.id} className="p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl flex flex-col gap-2 text-[10px]">
-                          {editingElementId === t.id ? (
-                            <div className="space-y-2">
-                              <div>
-                                <label className="text-[8px] text-slate-400 block mb-0.5">Judul Tabel (Caption)</label>
-                                <input 
-                                  type="text" 
-                                  value={editingElementData.title} 
-                                  onChange={e => setEditingElementData(p => ({ ...p, title: e.target.value }))}
-                                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs" 
-                                />
-                              </div>
-                              <div className="grid grid-cols-2 gap-2">
-                                <div>
-                                  <label className="text-[8px] text-slate-400 block mb-0.5">Letak Bab</label>
-                                  <select 
-                                    value={editingElementData.bab} 
-                                    onChange={e => setEditingElementData(p => ({ ...p, bab: e.target.value }))}
-                                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
-                                  >
-                                    <option value="bab1">{babTitles.bab1.prefix}</option>
-                                    <option value="bab3">{babTitles.bab3.prefix}</option>
-                                    <option value="bab4">{babTitles.bab4.prefix}</option>
-                                  </select>
-                                </div>
-                                <div>
-                                  <label className="text-[8px] text-slate-400 block mb-0.5">Header (Koma Pembatas)</label>
-                                  <input 
-                                    type="text" 
-                                    value={editingElementData.headers} 
-                                    onChange={e => setEditingElementData(p => ({ ...p, headers: e.target.value }))}
-                                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs" 
-                                  />
-                                </div>
-                              </div>
-                              <div>
-                                <label className="text-[8px] text-slate-400 block mb-0.5">Baris Data (Koma/Newline Pembatas)</label>
-                                <textarea 
-                                  value={editingElementData.rowsText} 
-                                  onChange={e => setEditingElementData(p => ({ ...p, rowsText: e.target.value }))}
-                                  rows={3} 
-                                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs" 
-                                />
-                              </div>
-                              <div className="flex gap-2 justify-end">
-                                <button onClick={() => setEditingElementId(null)} className="px-2 py-1 bg-slate-100 hover:bg-slate-250 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-400 rounded-lg text-[9px]">Batal</button>
-                                <button onClick={handleSaveTableEdit} className="px-2.5 py-1 bg-indigo-650 hover:bg-indigo-700 text-white rounded-lg text-[9px] font-bold">Simpan</button>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="flex justify-between items-center gap-2">
-                              <span className="truncate font-semibold text-slate-700 dark:text-slate-350">{t.title} ({t.bab.toUpperCase()})</span>
-                              <div className="flex items-center gap-1.5">
-                                <button 
-                                  onClick={() => {
-                                    setEditingElementId(t.id);
-                                    setEditingElementData({
-                                      title: t.title,
-                                      bab: t.bab,
-                                      headers: t.headers,
-                                      rowsText: t.rowsText || (t.rows ? t.rows.map(r => r.join(', ')).join('\n') : '')
-                                    });
-                                  }} 
-                                  className="text-indigo-500 hover:text-indigo-400 text-[9px]"
-                                >
-                                  Edit
-                                </button>
-                                <button onClick={() => deleteTable(t.id)} className="text-slate-450 hover:text-red-500"><Trash2 className="h-3.5 w-3.5" /></button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* List of current figures */}
-                    <div className="p-2 bg-slate-100 dark:bg-slate-950 rounded-xl space-y-1.5">
-                      <span className="font-bold text-slate-400 text-[10px] block mb-1">Daftar Gambar Terpasang ({getAllFigures().length})</span>
-                      {getAllFigures().map(f=>(
-                        <div key={f.id} className="p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl flex flex-col gap-2 text-[10px]">
-                          {editingElementId === f.id ? (
-                            <div className="space-y-2">
-                              <div>
-                                <label className="text-[8px] text-slate-400 block mb-0.5">Judul Gambar (Caption)</label>
-                                <input 
-                                  type="text" 
-                                  value={editingElementData.title} 
-                                  onChange={e => setEditingElementData(p => ({ ...p, title: e.target.value }))}
-                                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs" 
-                                />
-                              </div>
-                              <div>
-                                <label className="text-[8px] text-slate-400 block mb-0.5">Letak Bab</label>
-                                <select 
-                                  value={editingElementData.bab} 
-                                  onChange={e => setEditingElementData(p => ({ ...p, bab: e.target.value }))}
-                                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
-                                >
-                                  <option value="bab1">{babTitles.bab1.prefix}</option>
-                                  <option value="bab3">{babTitles.bab3.prefix}</option>
-                                  <option value="bab4">{babTitles.bab4.prefix}</option>
-                                </select>
-                              </div>
-                              <div className="flex gap-2 justify-end">
-                                <button onClick={() => setEditingElementId(null)} className="px-2 py-1 bg-slate-100 hover:bg-slate-250 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-400 rounded-lg text-[9px]">Batal</button>
-                                <button onClick={handleSaveFigureEdit} className="px-2.5 py-1 bg-indigo-650 hover:bg-indigo-700 text-white rounded-lg text-[9px] font-bold">Simpan</button>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="flex justify-between items-center gap-2">
-                              <span className="truncate font-semibold text-slate-700 dark:text-slate-350">{f.title} ({f.bab.toUpperCase()})</span>
-                              <div className="flex items-center gap-1.5">
-                                <button 
-                                  onClick={() => {
-                                    setEditingElementId(f.id);
-                                    setEditingElementData({
-                                      title: f.title,
-                                      bab: f.bab
-                                    });
-                                  }} 
-                                  className="text-indigo-500 hover:text-indigo-400 text-[9px]"
-                                >
-                                  Edit
-                                </button>
-                                <button onClick={() => deleteFigure(f.id)} className="text-slate-450 hover:text-red-500"><Trash2 className="h-3.5 w-3.5" /></button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* TAB 3: AI ASSISTANT PANEL */}
-            {activeTab === 'asisten' && (
-              <div className="space-y-4">
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
-                  <h3 className="font-bold text-slate-400 uppercase text-[10px] flex items-center gap-1"><Sparkles className="h-4 w-4 text-indigo-500" /> Kredensial API</h3>
-                  <input type="password" placeholder="API Key Gemini..." value={apiKey} onChange={e=>updateApiKey(e.target.value)} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg" />
-                </div>
-
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-3">
-                  <h3 className="font-bold text-slate-400 uppercase text-[10px]">Rekomendasi Judul & Metode</h3>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div><label className="text-[9px] text-slate-400 mb-0.5 block">Fakultas</label><input type="text" value={aiInputs.fakultas} onChange={e=>setAiInputs(p=>({...p, fakultas:e.target.value}))} className="w-full bg-white dark:bg-slate-950 border border-slate-200 p-1.5 rounded-lg text-xs" /></div>
-                    <div><label className="text-[9px] text-slate-400 mb-0.5 block">Prodi</label><input type="text" value={aiInputs.prodi} onChange={e=>setAiInputs(p=>({...p, prodi:e.target.value}))} className="w-full bg-white dark:bg-slate-950 border border-slate-200 p-1.5 rounded-lg text-xs" /></div>
-                  </div>
-                  <div><label className="text-[9px] text-slate-400 mb-0.5 block">Topik Kasar</label><textarea value={aiInputs.topik} onChange={e=>setAiInputs(p=>({...p, topik:e.target.value}))} rows={2} className="w-full bg-white dark:bg-slate-950 border border-slate-200 p-1.5 rounded-lg text-xs" /></div>
-                  <button onClick={fetchTitleRecommendations} disabled={loadingSuggestions} className="w-full bg-indigo-600 hover:bg-indigo-700 py-2 rounded-lg font-bold text-white flex items-center justify-center gap-1.5">{loadingSuggestions ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}Cari Judul & Metode AI</button>
-                </div>
-
-                {suggestedTitles.map((item, idx) => (
-                  <div key={idx} className="p-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800/80 rounded-xl flex flex-col gap-1.5 hover:border-indigo-500 transition-colors">
-                    <h5 className="font-bold text-slate-200 leading-normal">"{item.judul}"</h5>
-                    <div className="bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded text-[9px] font-bold self-start uppercase">Metode: {item.metode}</div>
-                    <p className="text-[10px] text-slate-400">{item.penjelasan_metode}</p>
-                    <button onClick={()=>applySuggestedTitle(item)} className="mt-1 border border-slate-200 dark:border-slate-700 py-1.5 rounded-lg font-bold hover:bg-slate-100 dark:hover:bg-slate-850 flex items-center justify-center gap-1"><Check className="h-3.5 w-3.5 text-indigo-500" /> Terapkan Judul</button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* TAB 4: BIBLIOGRAPHY & SCHOLAR CITATION FINDER */}
-            {activeTab === 'referensi' && (
-              <div className="space-y-4">
-                {/* Scholar & ResearchGate Search Panel */}
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
-                  <h3 className="font-bold text-slate-400 uppercase text-[10px] flex items-center gap-1"><Search className="h-3.5 w-3.5 text-indigo-500" /> Cari di Google Scholar / ResearchGate</h3>
-                  <form onSubmit={handleScholarSearch} className="space-y-2">
-                    <div className="flex gap-2">
-                      <input 
-                        type="text" 
-                        value={scholarQuery} 
-                        onChange={e=>setScholarQuery(e.target.value)} 
-                        placeholder="Kata kunci: Sugiyono 2018 / DeLone McLean" 
-                        className="flex-1 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-1.5 text-xs text-slate-800 dark:text-slate-100" 
-                      />
-                      <button type="submit" disabled={searchingScholar} className="bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg disabled:opacity-50">
-                        {searchingScholar ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-                      </button>
-                    </div>
-                    <div className="flex gap-2 items-center text-[10px] text-slate-500 dark:text-slate-400">
-                      <span className="shrink-0 font-bold">Rentang Tahun:</span>
-                      <input 
-                        type="number" 
-                        min="1950" 
-                        max="2030" 
-                        value={scholarYearStart} 
-                        onChange={e=>setScholarYearStart(parseInt(e.target.value) || new Date().getFullYear() - 10)} 
-                        className="w-16 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded p-1 text-center text-xs text-slate-850 dark:text-slate-250 font-bold" 
-                      />
-                      <span>s/d</span>
-                      <input 
-                        type="number" 
-                        min="1950" 
-                        max="2030" 
-                        value={scholarYearEnd} 
-                        onChange={e=>setScholarYearEnd(parseInt(e.target.value) || new Date().getFullYear())} 
-                        className="w-16 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded p-1 text-center text-xs text-slate-850 dark:text-slate-250 font-bold" 
-                      />
-                    </div>
-                  </form>
-
-                  {/* Scholar AI Search Results */}
-                  {scholarResults.length > 0 && (
-                    <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">
-                      {scholarResults.map((cit, i)=>(
-                        <div key={i} className="p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg flex flex-col gap-1 text-[10px]">
-                          <div className="flex justify-between items-center mb-1">
-                            <span className="bg-indigo-500/10 text-indigo-400 px-1 py-0.5 rounded text-[8px] font-bold uppercase">{cit.source}</span>
-                            <div className="flex gap-1.5 items-center">
-                              {cit.url && (
-                                <a 
-                                  href={cit.url} 
-                                  target="_blank" 
-                                  rel="noopener noreferrer" 
-                                  className="text-indigo-500 dark:text-indigo-400 hover:text-indigo-650 dark:hover:text-indigo-300 font-semibold flex items-center gap-0.5 text-[8.5px] border border-indigo-500/20 px-1.5 py-0.5 rounded bg-indigo-500/5 hover:bg-indigo-500/10"
-                                >
-                                  <ExternalLink className="h-2.5 w-2.5" /> PDF
-                                </a>
-                              )}
-                              <button onClick={()=>importCitation(cit)} className="text-indigo-500 dark:text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300 font-bold flex items-center gap-0.5 text-[9px]"><Plus className="h-3 w-3" /> Tambah</button>
-                            </div>
-                          </div>
-                          <div className="font-semibold">"{cit.title}"</div>
-                          <div className="text-slate-400">{cit.author} ({cit.year}) • {cit.publisher}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Manual Citation form */}
-                <form onSubmit={handleAddReference} className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-3">
-                  <h3 className="font-bold text-slate-400 uppercase text-[10px]">Tambah Citasi Manual</h3>
-                  <div><label className="text-[10px] text-slate-400 block mb-0.5">Penulis (Author)</label><input type="text" value={refInput.author} onChange={e=>setRefInput(p=>({...p, author:e.target.value}))} placeholder="Sugiyono, A. atau DeLone, W." className="w-full bg-white dark:bg-slate-950 border border-slate-200 p-1.5 rounded-lg text-xs" /></div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div><label className="text-[10px] text-slate-400 block mb-0.5">Tahun</label><input type="text" value={refInput.year} onChange={e=>setRefInput(p=>({...p, year:e.target.value}))} className="w-full bg-white dark:bg-slate-950 border border-slate-200 p-1.5 rounded-lg text-xs" /></div>
-                    <div>
-                      <label className="text-[10px] text-slate-400 block mb-0.5">Tipe</label>
-                      <select value={refInput.type} onChange={e=>setRefInput(p=>({...p, type:e.target.value}))} className="w-full bg-white dark:bg-slate-950 border border-slate-200 p-1.5 rounded-lg text-xs">
-                        <option value="book">Buku</option>
-                        <option value="journal">Jurnal</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div><label className="text-[10px] text-slate-400 block mb-0.5">Judul</label><input type="text" value={refInput.title} onChange={e=>setRefInput(p=>({...p, title:e.target.value}))} className="w-full bg-white dark:bg-slate-950 border border-slate-200 p-1.5 rounded-lg text-xs" /></div>
-                  <div><label className="text-[10px] text-slate-400 block mb-0.5">Penerbit & Kota / Nama Jurnal Vol(No) Hal</label><input type="text" value={refInput.publisher} onChange={e=>setRefInput(p=>({...p, publisher:e.target.value}))} className="w-full bg-white dark:bg-slate-950 border border-slate-200 p-1.5 rounded-lg text-xs" /></div>
-                  <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 py-1.5 text-white font-bold rounded-lg flex items-center justify-center gap-1"><Plus className="h-4 w-4" /> Tambah Pustaka</button>
-                </form>
-
-                {/* References Styles & List */}
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
-                  <div className="flex justify-between items-center pb-2 border-b border-slate-200 dark:border-slate-800">
-                    <span className="font-bold text-slate-400 text-[10px]">Daftar Sitasi ({references.length})</span>
-                    <div className="flex bg-slate-100 dark:bg-slate-950 p-0.5 gap-0.5 rounded text-[9px] font-bold">
-                      <button onClick={()=>setRefStyle('apa')} className={`px-1.5 py-0.5 rounded ${refStyle === 'apa' ? 'bg-white dark:bg-slate-900 text-indigo-500' : 'text-slate-400'}`}>APA</button>
-                      <button onClick={()=>setRefStyle('ieee')} className={`px-1.5 py-0.5 rounded ${refStyle === 'ieee' ? 'bg-white dark:bg-slate-900 text-indigo-500' : 'text-slate-400'}`}>IEEE</button>
-                    </div>
-                  </div>
-                  <div className="space-y-1.5 max-h-[180px] overflow-y-auto pr-1">
-                    {references.map(r=>(
-                      <div key={r.id} className="p-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800/50 rounded flex justify-between text-[9px] gap-2">
-                        <span className="truncate">{r.author} ({r.year})</span>
-                        <button onClick={()=>setReferences(references.filter(ref=>ref.id!==r.id))} className="text-slate-400 hover:text-red-500"><Trash2 className="h-3 w-3" /></button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Sidebar Action Buttons Footer */}
-          <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/40 space-y-3">
-            {/* Active draft status */}
-            {(() => {
-              const isUnsaved = !saveFilename || saveFilename === 'Draft_Skripsi';
-              return (
-                <div className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[10px] ${isUnsaved ? 'bg-amber-500/10 text-amber-500' : 'bg-emerald-500/10 text-emerald-500'}`}>
-                  <span className="flex items-center gap-1.5 min-w-0">
-                    <FolderOpen className="h-3 w-3 shrink-0" />
-                    <span className="truncate font-semibold">
-                      {isUnsaved ? 'Draft baru (belum disimpan)' : saveFilename}
-                    </span>
-                  </span>
-                  <span className="shrink-0 font-bold uppercase tracking-wide">
-                    {isUnsaved ? 'Manual' : (autosaveEnabled ? '● Autosave' : 'Manual')}
-                  </span>
-                </div>
-              );
-            })()}
-            <div className="flex gap-2">
-              <input type="text" value={saveFilename} onChange={e=>setSaveFilename(e.target.value)} placeholder="Nama draft..." className="flex-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-850 px-3 py-1.5 rounded-lg text-xs" />
-              <button onClick={handleSaveDraftDB} className="border border-slate-250 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-900 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 text-xs"><Save className="h-4 w-4 text-slate-300" />Simpan</button>
-            </div>
-            
-            <div className="grid grid-cols-2 gap-2">
-              <button onClick={()=>{fetchDraftsList(); setShowDraftManager(true)}} className="border border-slate-250 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-900 py-2 rounded-lg font-bold flex items-center justify-center gap-1.5"><FolderOpen className="h-4 w-4" />Drafts</button>
-              <button onClick={handlePrint} className="bg-indigo-600 hover:bg-indigo-700 py-2 rounded-lg font-bold text-white flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/10"><Printer className="h-4 w-4" />Unduh / Cetak</button>
-            </div>
-
-            <div>
-              <label className="w-full border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50/50 dark:bg-indigo-900/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 py-2 rounded-lg font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors text-sm">
-                <FileText className="h-4 w-4" />
-                Import DOCX (Word)
-                <input 
-                  type="file" 
-                  accept=".docx,.doc" 
-                  className="hidden" 
-                  onChange={handleDocxImport} 
+                <TablesFiguresPanel
+                  show={activeSection === 'elemen'}
+                  babTitles={babTitles}
+                  tableInput={tableInput}
+                  figureInput={figureInput}
+                  editingElementId={editingElementId}
+                  editingElementData={editingElementData}
+                  tables={getAllTables()}
+                  figures={getAllFigures()}
+                  onTableInputChange={setTableInput}
+                  onFigureInputChange={setFigureInput}
+                  onEditingElementIdChange={setEditingElementId}
+                  onEditingElementDataChange={setEditingElementData}
+                  onAddTable={handleAddTable}
+                  onAddFigure={handleAddFigure}
+                  onSaveTableEdit={handleSaveTableEdit}
+                  onSaveFigureEdit={handleSaveFigureEdit}
+                  onDeleteTable={deleteTable}
+                  onDeleteFigure={deleteFigure}
                 />
-              </label>
-            </div>
+              </div>
+            )}
+            <AiAssistantPanel
+              show={activeTab === 'asisten'}
+              apiKey={apiKey}
+              aiInputs={aiInputs}
+              loadingSuggestions={loadingSuggestions}
+              suggestedTitles={suggestedTitles}
+              onApiKeyChange={updateApiKey}
+              onAiInputsChange={setAiInputs}
+              onFetchTitleRecommendations={fetchTitleRecommendations}
+              onApplySuggestedTitle={applySuggestedTitle}
+            />
+            <BibliographyPanel
+              show={activeTab === 'referensi'}
+              scholarQuery={scholarQuery}
+              searchingScholar={searchingScholar}
+              scholarYearStart={scholarYearStart}
+              scholarYearEnd={scholarYearEnd}
+              scholarResults={scholarResults}
+              refInput={refInput}
+              references={references}
+              refStyle={refStyle}
+              onScholarQueryChange={setScholarQuery}
+              onScholarYearStartChange={setScholarYearStart}
+              onScholarYearEndChange={setScholarYearEnd}
+              onScholarSearch={handleScholarSearch}
+              onImportCitation={importCitation}
+              onRefInputChange={setRefInput}
+              onAddReference={handleAddReference}
+              onRefStyleChange={setRefStyle}
+              onReferencesChange={setReferences}
+            />
           </div>
+          <SidebarFooter
+            saveFilename={saveFilename}
+            autosaveEnabled={autosaveEnabled}
+            onSaveFilenameChange={setSaveFilename}
+            onSaveDraft={handleSaveDraftDB}
+            onOpenDraftManager={() => {
+              fetchDraftsList();
+              setShowDraftManager(true);
+            }}
+            onPrint={handlePrint}
+            onImportDocx={handleDocxImport}
+          />
         </aside>
         )}
 
@@ -8640,6 +7326,15 @@ export default function Index() {
               <button onClick={() => setZoomLevel(prev => Math.max(prev - 10, 40))} className="hover:bg-slate-800 p-1.5 rounded-full"><ZoomOut className="h-4 w-4" /></button>
               <span className="font-mono text-xs w-10 text-center">{zoomLevel}%</span>
               <button onClick={() => setZoomLevel(prev => Math.min(prev + 10, 140))} className="hover:bg-slate-800 p-1.5 rounded-full"><ZoomIn className="h-4 w-4" /></button>
+              <button
+                type="button"
+                onClick={() => setShowMarginGuide(prev => !prev)}
+                className={`p-1.5 rounded-full transition-colors ${showMarginGuide ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 text-slate-300'}`}
+                title={showMarginGuide ? 'Sembunyikan garis margin' : 'Tampilkan garis margin'}
+                aria-pressed={showMarginGuide}
+              >
+                <Ruler className="h-4 w-4" />
+              </button>
             </div>
           </div>
 
@@ -8870,7 +7565,7 @@ export default function Index() {
           {/* Scale transformer for preview paper */}
           <div className="flex flex-col items-center origin-top transition-transform duration-200" style={{ transform: `scale(${zoomLevel / 100})` }} onClick={handlePreviewBackgroundClick}>
             <div 
-              className="flex flex-col gap-8 pb-32"
+              className={`flex flex-col gap-8 pb-32 ${showMarginGuide ? 'show-margin-guide' : ''}`}
               style={{
                 '--doc-margin-top': `${layout.marginTop}cm`,
                 '--doc-margin-left': `${layout.marginLeft}cm`,
@@ -9379,758 +8074,102 @@ export default function Index() {
         </main>
       </div>
 
-      {/* ==========================================================================
-         DRAFT MANAGER (FILE-MANAGER STYLE FULL PAGE)
-         ========================================================================== */}
-      {showDraftManager && (
-        <div className="fixed inset-0 z-[55] bg-slate-950 text-slate-100 flex flex-col no-print animate-in fade-in duration-150">
-          {/* Top bar */}
-          <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900/60">
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setShowDraftManager(false)}
-                className="p-2 rounded-lg border border-slate-800 hover:bg-slate-800 text-slate-300"
-                title="Kembali ke editor"
-              >
-                <ArrowLeft className="h-4 w-4" />
-              </button>
-              <div className="flex items-center gap-2">
-                <div className="p-2 bg-indigo-500/10 rounded-lg text-indigo-400">
-                  <FolderOpen className="h-5 w-5" />
-                </div>
-                <div>
-                  <h2 className="font-bold text-base tracking-tight">Draft Manager</h2>
-                  <p className="text-[11px] text-slate-400">{draftsList.length} dokumen tersimpan</p>
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="relative">
-                <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
-                <input
-                  type="text"
-                  value={draftSearch}
-                  onChange={(e) => setDraftSearch(e.target.value)}
-                  placeholder="Cari draft..."
-                  className="bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-3 py-2 text-xs w-56 focus:outline-none focus:border-indigo-500/60"
-                />
-              </div>
-              <button
-                onClick={fetchDraftsList}
-                className="p-2 rounded-lg border border-slate-800 hover:bg-slate-800 text-slate-300"
-                title="Muat ulang"
-              >
-                <RotateCcw className="h-4 w-4" />
-              </button>
-              <label className="cursor-pointer bg-slate-800 hover:bg-slate-700 text-slate-100 px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5">
-                <FolderOpen className="h-4 w-4" />
-                Impor Word
-                <input type="file" accept=".docx,.doc" className="hidden" onChange={(e) => { setShowDraftManager(false); handleDocxImport(e); }} />
-              </label>
-            </div>
-          </div>
+      <DraftManager
+        show={showDraftManager}
+        draftsList={draftsList}
+        loadingDrafts={loadingDrafts}
+        draftSearch={draftSearch}
+        saveFilename={saveFilename}
+        onClose={() => setShowDraftManager(false)}
+        onSearchChange={setDraftSearch}
+        onRefresh={fetchDraftsList}
+        onImportDocx={handleDocxImport}
+        onOpenNewDraftChooser={() => setShowNewDraftChooser(true)}
+        onLoadDraft={handleLoadDraftDB}
+        onDeleteDraft={handleDeleteDraftDB}
+      />
 
-          {/* Body */}
-          <div className="flex-1 overflow-y-auto p-6">
-            {loadingDrafts ? (
-              <div className="flex flex-col items-center justify-center py-24 gap-3 text-slate-400">
-                <Loader2 className="h-8 w-8 animate-spin text-indigo-500" />
-                <span className="text-sm">Memuat daftar draft...</span>
-              </div>
-            ) : (() => {
-              const filtered = draftsList.filter(item =>
-                !draftSearch.trim() ||
-                (item.title || '').toLowerCase().includes(draftSearch.toLowerCase()) ||
-                (item.author || '').toLowerCase().includes(draftSearch.toLowerCase())
-              );
-              return (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                  {/* + New Draft card */}
-                  <button
-                    onClick={() => setShowNewDraftChooser(true)}
-                    className="group bg-slate-900/40 border-2 border-dashed border-slate-700 hover:border-indigo-500/70 rounded-xl p-4 cursor-pointer transition-all flex flex-col items-center justify-center gap-2 min-h-[170px] text-slate-400 hover:text-indigo-300"
-                  >
-                    <div className="p-3 bg-slate-800/60 group-hover:bg-indigo-500/15 rounded-full transition-colors">
-                      <Plus className="h-7 w-7" />
-                    </div>
-                    <span className="text-xs font-bold">Draft Baru</span>
-                    <span className="text-[9px] text-slate-500">Kosong, outline, atau template</span>
-                  </button>
+      <NewDraftChooser
+        show={showNewDraftChooser}
+        onClose={() => setShowNewDraftChooser(false)}
+        onCreateTemplate={() => {
+          setShowNewDraftChooser(false);
+          setShowDraftManager(false);
+          handleCreateNewBlankDraft();
+        }}
+        onCreateBlank={() => {
+          setShowNewDraftChooser(false);
+          setShowDraftManager(false);
+          handleCreateBlankDocument();
+        }}
+        onCreateWithOutline={() => {
+          setShowNewDraftChooser(false);
+          setShowDraftManager(false);
+          setShowOutlineBuilder(true);
+        }}
+        onImportDocx={(event) => {
+          setShowNewDraftChooser(false);
+          setShowDraftManager(false);
+          handleDocxImport(event);
+        }}
+      />
+      <DraftListModal
+        show={showDraftsModal}
+        loadingDrafts={loadingDrafts}
+        draftsList={draftsList}
+        onClose={() => setShowDraftsModal(false)}
+        onLoadDraft={handleLoadDraftDB}
+        onDeleteDraft={handleDeleteDraftDB}
+      />
+      <DownloadModal
+        show={showDownloadModal}
+        format={downloadFormat}
+        range={downloadRange}
+        split={downloadSplit}
+        selectedSections={selectedDownloadSections}
+        sectionGroups={SECTION_GROUPS}
+        layout={layout}
+        babTitles={babTitles}
+        onClose={() => setShowDownloadModal(false)}
+        onFormatChange={setDownloadFormat}
+        onRangeChange={setDownloadRange}
+        onSplitChange={setDownloadSplit}
+        onSelectedSectionsChange={setSelectedDownloadSections}
+        onStartExport={handleStartExport}
+      />
 
-                  {filtered.map((item) => {
-                    const activeSlug = (saveFilename || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-                    const isActive = item.slug && item.slug === activeSlug && saveFilename !== 'Draft_Skripsi';
-                    return (
-                    <div
-                      key={item.key}
-                      onClick={() => { handleLoadDraftDB(item); setShowDraftManager(false); }}
-                      className={`group relative bg-slate-900 border rounded-xl p-4 cursor-pointer transition-all hover:shadow-[0_0_18px_-4px_rgba(99,102,241,0.35)] flex flex-col gap-3 ${isActive ? 'border-emerald-500 ring-1 ring-emerald-500/50' : 'border-slate-800 hover:border-indigo-500/70'}`}
-                    >
-                      {isActive && (
-                        <span className="absolute -top-2 left-3 bg-emerald-500 text-emerald-950 text-[8px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded shadow">
-                          ● Sedang Dibuka
-                        </span>
-                      )}
-                      <div className="flex items-start justify-between">
-                        <div className={`p-3 rounded-xl transition-colors ${isActive ? 'bg-emerald-500/15 text-emerald-400' : 'bg-indigo-500/10 text-indigo-400 group-hover:bg-indigo-500/20'}`}>
-                          <FileText className="h-7 w-7" />
-                        </div>
-                        <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${item.source === 'database' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-blue-500/10 text-blue-400'}`}>
-                          {item.source}
-                        </span>
-                      </div>
-                      <div className="min-w-0">
-                        <h3 className="font-bold text-xs text-slate-100 truncate" title={item.title}>{item.title || '(Tanpa Judul)'}</h3>
-                        <p className="text-[10px] text-slate-400 truncate mt-0.5">{item.author || 'Tanpa penulis'}</p>
-                        {item.slug && (
-                          <p className="text-[9px] text-indigo-400 font-mono truncate mt-0.5" title={`slug / nama file: ${item.slug}`}>
-                            🏷️ {item.slug}
-                          </p>
-                        )}
-                        <p className="text-[9px] text-slate-500 flex items-center gap-1 mt-1.5">
-                          <Clock className="h-2.5 w-2.5" />
-                          {item.updated_at}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-1.5 pt-2 border-t border-slate-800/70">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleLoadDraftDB(item); setShowDraftManager(false); }}
-                          className="flex-1 bg-indigo-600/15 hover:bg-indigo-600/30 text-indigo-300 py-1.5 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1"
-                        >
-                          <FolderOpen className="h-3 w-3" /> Buka
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleDeleteDraftDB(e, item); }}
-                          className="p-1.5 rounded-lg hover:bg-red-500/15 text-slate-500 hover:text-red-400 transition-colors"
-                          title="Hapus draft"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                    );
-                  })}
+      <AiPromptModal
+        show={showAiPromptModal}
+        target={aiPromptTarget}
+        promptInput={aiPromptInput}
+        onPromptInputChange={setAiPromptInput}
+        onClose={closeAiPromptModal}
+        onGenerateDirect={() => generateAiPromptTarget('')}
+        onGenerateWithPrompt={() => generateAiPromptTarget(aiPromptInput)}
+      />
 
-                  {filtered.length === 0 && draftSearch.trim() && (
-                    <div className="col-span-full text-center py-12 text-slate-500 italic text-sm">
-                      Tidak ada draft yang cocok dengan "{draftSearch}".
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
-        </div>
-      )}
+      <ToastNotification toast={toast} />
+      <WelcomeModal
+        show={showWelcomeModal}
+        hasLocalDraft={hasLocalDraft}
+        loadingDrafts={loadingDrafts}
+        draftsList={draftsList}
+        onClose={() => setShowWelcomeModal(false)}
+        onCreateTemplate={handleCreateNewBlankDraft}
+        onCreateBlank={handleCreateBlankDocument}
+        onOpenOutline={() => setShowOutlineBuilder(true)}
+        onImportDocx={handleDocxImport}
+        onLoadDraft={handleLoadDraftDB}
+        onDeleteDraft={handleDeleteDraftDB}
+      />
 
-      {/* NEW DRAFT CHOOSER (from Draft Manager) */}
-      {showNewDraftChooser && (
-        <div className="fixed inset-0 z-[60] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 no-print text-slate-100 animate-in fade-in duration-150">
-          <div className="bg-slate-900 border border-slate-800/80 rounded-2xl w-[620px] max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
-            <div className="p-5 border-b border-slate-800/60 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 bg-indigo-500/10 rounded-lg text-indigo-400"><Plus className="h-4 w-4" /></div>
-                <h3 className="font-bold text-sm text-slate-100">Buat Draft Baru</h3>
-              </div>
-              <button onClick={() => setShowNewDraftChooser(false)} className="text-slate-400 hover:text-slate-200 text-xs">Tutup</button>
-            </div>
-            <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div
-                onClick={() => { setShowNewDraftChooser(false); setShowDraftManager(false); handleCreateNewBlankDraft(); }}
-                className="group p-5 bg-slate-950 border border-slate-850 hover:border-indigo-500/80 rounded-xl cursor-pointer transition-all flex flex-col gap-2"
-              >
-                <div className="p-1.5 bg-indigo-500/10 rounded-lg text-indigo-400 w-fit"><Plus className="h-4 w-4" /></div>
-                <h4 className="font-bold text-xs text-slate-200 group-hover:text-indigo-400 transition-colors">Template Skripsi Standar</h4>
-                <p className="text-[10px] text-slate-400 leading-normal">Struktur lengkap BAB I–V dengan sub-bab standar sesuai format akademik.</p>
-              </div>
-              <div
-                onClick={() => { setShowNewDraftChooser(false); setShowDraftManager(false); handleCreateBlankDocument(); }}
-                className="group p-5 bg-slate-950 border border-slate-850 hover:border-indigo-500/80 rounded-xl cursor-pointer transition-all flex flex-col gap-2"
-              >
-                <div className="p-1.5 bg-slate-500/10 rounded-lg text-slate-300 w-fit"><FileText className="h-4 w-4" /></div>
-                <h4 className="font-bold text-xs text-slate-200 group-hover:text-indigo-400 transition-colors">Dokumen Kosong</h4>
-                <p className="text-[10px] text-slate-400 leading-normal">Satu halaman kosong tanpa outline, daftar isi, atau struktur BAB.</p>
-              </div>
-              <div
-                onClick={() => { setShowNewDraftChooser(false); setShowDraftManager(false); setShowOutlineBuilder(true); }}
-                className="group p-5 bg-slate-950 border border-slate-850 hover:border-amber-500/80 rounded-xl cursor-pointer transition-all flex flex-col gap-2"
-              >
-                <div className="p-1.5 bg-amber-500/10 rounded-lg text-amber-400 w-fit"><ListChecks className="h-4 w-4" /></div>
-                <h4 className="font-bold text-xs text-slate-200 group-hover:text-amber-400 transition-colors">Dengan Outline</h4>
-                <p className="text-[10px] text-slate-400 leading-normal">Tentukan sendiri struktur BAB dan sub-bab yang diinginkan.</p>
-              </div>
-            </div>
-            <div className="px-6 pb-5 -mt-2">
-              <label className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer flex items-center gap-1.5 w-fit">
-                <FolderOpen className="h-3.5 w-3.5" /> atau Impor dari file Word (.doc/.docx)
-                <input type="file" accept=".docx,.doc" className="hidden" onChange={(e) => { setShowNewDraftChooser(false); setShowDraftManager(false); handleDocxImport(e); }} />
-              </label>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* DRAFTS LIST DATABASE MODAL */}
-      {showDraftsModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 no-print text-slate-100">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-[500px] max-h-[500px] flex flex-col shadow-2xl p-6">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3 mb-4">
-              <h3 className="font-bold flex items-center gap-2 text-sm text-slate-200">
-                <Database className="h-5 w-5 text-indigo-500" />
-                Daftar Draft Tersimpan
-              </h3>
-              <button onClick={() => setShowDraftsModal(false)} className="text-slate-400 hover:text-slate-200 text-xs">Tutup</button>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto space-y-2">
-              {loadingDrafts ? (
-                <div className="flex flex-col items-center justify-center py-12 gap-3 text-slate-400">
-                  <Loader2 className="h-8 w-8 animate-spin text-indigo-500" />
-                  <span>Sedang memuat data...</span>
-                </div>
-              ) : draftsList.length === 0 ? (
-                <div className="text-center py-12 text-slate-500 italic text-xs">Belum ada draft tersimpan.</div>
-              ) : (
-                draftsList.map((item) => (
-                  <div 
-                    key={item.key} 
-                    onClick={() => handleLoadDraftDB(item)}
-                    className="p-3 rounded-lg border border-slate-850 hover:border-indigo-500 bg-slate-950/50 hover:bg-slate-950 flex justify-between items-center cursor-pointer transition-all"
-                  >
-                    <div className="flex-1 min-w-0 pr-4">
-                      <h4 className="font-bold text-xs truncate text-slate-200">"{item.title}"</h4>
-                      <p className="text-[10px] text-slate-400 mt-1">Penulis: {item.author} • {item.updated_at}</p>
-                    </div>
-                    
-                    <div className="flex items-center gap-2">
-                      <span className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${item.source === 'database' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-blue-500/10 text-blue-400'}`}>
-                        {item.source}
-                      </span>
-                      <button onClick={(e) => handleDeleteDraftDB(e, item)} className="p-1 hover:bg-slate-850 text-slate-500 hover:text-red-500 rounded">
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* DOWNLOAD / PRINT OPTIONS MODAL */}
-      {showDownloadModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 no-print text-slate-100">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-[550px] max-h-[90vh] flex flex-col shadow-2xl p-6 overflow-hidden">
-            
-            {/* Modal Header */}
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3 mb-4">
-              <h3 className="font-bold flex items-center gap-2 text-sm text-slate-200">
-                <Printer className="h-5 w-5 text-indigo-500" />
-                Unduh & Cetak Dokumen
-              </h3>
-              <button onClick={() => setShowDownloadModal(false)} className="text-slate-400 hover:text-slate-200 text-xs">Tutup</button>
-            </div>
-
-            {/* Modal Body */}
-            <div className="flex-1 overflow-y-auto pr-1 space-y-5 text-xs text-slate-350">
-              
-              {/* Format Selection */}
-              <div className="space-y-2">
-                <label className="font-bold text-slate-400 block">Format Dokumen</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    onClick={() => setDownloadFormat('pdf')}
-                    className={`p-3 border rounded-xl text-left transition-all flex flex-col gap-1 ${downloadFormat === 'pdf' ? 'bg-indigo-600/15 border-indigo-500 text-indigo-400 shadow-sm' : 'bg-slate-950 border-slate-850 hover:bg-slate-850'}`}
-                  >
-                    <span className="font-bold text-xs flex items-center gap-1">
-                      <span className="h-2 w-2 rounded-full bg-red-500"></span>
-                      PDF Document
-                    </span>
-                    <span className="text-[10px] text-slate-500 leading-tight">Cocok untuk cetak langsung dengan tata letak & page-number presisi.</span>
-                  </button>
-                  <button
-                    onClick={() => setDownloadFormat('docx')}
-                    className={`p-3 border rounded-xl text-left transition-all flex flex-col gap-1 ${downloadFormat === 'docx' ? 'bg-indigo-600/15 border-indigo-500 text-indigo-400 shadow-sm' : 'bg-slate-950 border-slate-850 hover:bg-slate-850'}`}
-                  >
-                    <span className="font-bold text-xs flex items-center gap-1">
-                      <span className="h-2 w-2 rounded-full bg-blue-500"></span>
-                      Microsoft Word (.doc)
-                    </span>
-                    <span className="text-[10px] text-slate-500 leading-tight">File dokumen Microsoft Word yang dapat diedit (editable) di PC Anda.</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Range Selection */}
-              <div className="space-y-2">
-                <label className="font-bold text-slate-400 block">Rentang Halaman / Bagian</label>
-                <div className="flex gap-2 p-1 bg-slate-950 rounded-lg border border-slate-850">
-                  <button
-                    onClick={() => setDownloadRange('all')}
-                    className={`flex-1 py-2 text-center rounded-md font-bold transition-all ${downloadRange === 'all' ? 'bg-slate-850 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
-                  >
-                    Semua Halaman
-                  </button>
-                  <button
-                    onClick={() => setDownloadRange('custom')}
-                    className={`flex-1 py-2 text-center rounded-md font-bold transition-all ${downloadRange === 'custom' ? 'bg-slate-850 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
-                  >
-                    Kustom Halaman / Bab
-                  </button>
-                </div>
-
-                {downloadRange === 'custom' && (
-                  <div className="p-3 bg-slate-950 border border-slate-850 rounded-xl space-y-3">
-                    <div className="flex justify-between items-center text-[10px]">
-                      <span className="text-slate-400 font-semibold">Pilih bagian yang ingin diunduh:</span>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedDownloadSections(SECTION_GROUPS.map(g => g.id))}
-                          className="text-indigo-400 hover:underline"
-                        >
-                          Pilih Semua
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedDownloadSections([])}
-                          className="text-slate-500 hover:text-slate-350 hover:underline"
-                        >
-                          Kosongkan
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 text-[10.5px]">
-                      {SECTION_GROUPS.filter(g => {
-                        if (g.id === 'persetujuan') return layout.showPersetujuan;
-                        if (g.id === 'pengesahan') return layout.showPengesahan;
-                        if (g.id === 'pernyataan') return layout.showPernyataan;
-                        if (g.id === 'abstrak-indo') return layout.showAbstractIndo;
-                        if (g.id === 'abstrak-eng') return layout.showAbstractEng;
-                        if (g.id === 'daftar-rumus') return layout.showDaftarRumus;
-                        return true;
-                      }).map((g) => {
-                        const checked = selectedDownloadSections.includes(g.id);
-                        return (
-                          <label key={g.id} className="flex items-center gap-2 p-1.5 rounded hover:bg-slate-900 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={(e) => {
-                                if (e.target.checked) {
-                                  setSelectedDownloadSections([...selectedDownloadSections, g.id]);
-                                } else {
-                                  setSelectedDownloadSections(selectedDownloadSections.filter(id => id !== g.id));
-                                }
-                              }}
-                              className="rounded border-slate-700 bg-slate-900 text-indigo-600 focus:ring-indigo-500/25 focus:ring-offset-0"
-                            />
-                            <span className={checked ? 'text-slate-200 font-medium' : 'text-slate-400'}>
-                              {g.id.startsWith('bab') ? `${babTitles[g.id].prefix} ${babTitles[g.id].title}` : g.name}
-                            </span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Split Chapter options */}
-              <div className="space-y-2">
-                <label className="font-bold text-slate-400 block">Metode Pengemasan File</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    onClick={() => setDownloadSplit(false)}
-                    className={`p-3 border rounded-xl text-left transition-all flex flex-col gap-1 ${!downloadSplit ? 'bg-indigo-600/15 border-indigo-500 text-indigo-400 shadow-sm' : 'bg-slate-950 border-slate-850 hover:bg-slate-850'}`}
-                  >
-                    <span className="font-bold text-xs flex items-center gap-1">
-                      Gabung Semua
-                    </span>
-                    <span className="text-[10px] text-slate-500 leading-tight">Mengunduh satu file lengkap berisi semua halaman yang dipilih secara berurutan.</span>
-                  </button>
-                  <button
-                    onClick={() => setDownloadSplit(true)}
-                    className={`p-3 border rounded-xl text-left transition-all flex flex-col gap-1 ${downloadSplit ? 'bg-indigo-600/15 border-indigo-500 text-indigo-400 shadow-sm' : 'bg-slate-950 border-slate-850 hover:bg-slate-850'}`}
-                  >
-                    <span className="font-bold text-xs flex items-center gap-1">
-                      Pisah per Bab / Bagian
-                    </span>
-                    <span className="text-[10px] text-slate-500 leading-tight">Men-split & mengunduh dokumen secara otomatis menjadi file-file terpisah per bab/heading 1.</span>
-                  </button>
-                </div>
-              </div>
-
-            </div>
-
-            {/* Modal Footer */}
-            <div className="border-t border-slate-800 pt-3 mt-5 flex justify-end gap-2">
-              <button
-                onClick={() => setShowDownloadModal(false)}
-                className="px-4 py-2 border border-slate-800 hover:bg-slate-850 rounded-lg font-bold text-xs"
-              >
-                Batal
-              </button>
-              <button
-                onClick={handleStartExport}
-                className="bg-indigo-600 hover:bg-indigo-700 px-5 py-2 rounded-lg font-bold text-white flex items-center gap-1.5 text-xs shadow-md shadow-indigo-650/10"
-              >
-                {downloadFormat === 'pdf' ? <Printer className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
-                Mulai {downloadFormat === 'pdf' ? 'Cetak PDF' : 'Unduh DOCX'}
-              </button>
-            </div>
-
-          </div>
-        </div>
-      )}
-
-      {/* AI PROMPT OPTIONS MODAL */}
-      {showAiPromptModal && aiPromptTarget && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 no-print text-slate-100 p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-[480px] flex flex-col shadow-2xl p-6 animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3 mb-4">
-              <h3 className="font-bold flex items-center gap-2 text-sm text-slate-200">
-                <Sparkles className="h-5 w-5 text-indigo-500" />
-                Tulis Konten dengan AI
-              </h3>
-              <button 
-                onClick={() => {
-                  setShowAiPromptModal(false);
-                  setAiPromptTarget(null);
-                }} 
-                className="text-slate-400 hover:text-slate-200 text-xs"
-              >
-                Batal
-              </button>
-            </div>
-            
-            <div className="space-y-4">
-              <div>
-                <span className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Target Bagian:</span>
-                <div className="bg-slate-950/60 p-2.5 rounded-lg border border-slate-850 text-xs font-bold text-slate-350">
-                  {aiPromptTarget.displayTitle}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
-                  Instruksi Tambahan (Opsional)
-                </label>
-                <textarea
-                  value={aiPromptInput}
-                  onChange={(e) => setAiPromptInput(e.target.value)}
-                  placeholder="Contoh: sertakan tabel perbandingan metode, tulis dalam 2 paragraf, gunakan nada akademis formal, dll."
-                  rows={4}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
-                />
-                <span className="block text-[9px] text-slate-500 mt-1 leading-normal">
-                  *Jika Anda meminta tabel, AI akan otomatis menghasilkan data tabel dan menambahkannya sebagai bagian tabel dinamis baru tepat di bawah paragraf ini.
-                </span>
-              </div>
-            </div>
-
-            <div className="border-t border-slate-800 pt-4 mt-5 flex justify-end gap-2 text-xs">
-              <button
-                onClick={() => {
-                  const target = aiPromptTarget;
-                  setShowAiPromptModal(false);
-                  setAiPromptTarget(null);
-                  if (target.legacyKey) {
-                    handleAIGenerateSection(target.legacyKey, target.displayTitle, '');
-                  } else {
-                    handleAIGenerateDynamic(target.babKey, target.id, target.displayTitle, '');
-                  }
-                }}
-                className="px-4 py-2 border border-slate-800 hover:bg-slate-850 rounded-lg font-bold text-slate-350 hover:text-slate-200"
-              >
-                Tulis Langsung
-              </button>
-              <button
-                onClick={() => {
-                  const target = aiPromptTarget;
-                  const prompt = aiPromptInput;
-                  setShowAiPromptModal(false);
-                  setAiPromptTarget(null);
-                  if (target.legacyKey) {
-                    handleAIGenerateSection(target.legacyKey, target.displayTitle, prompt);
-                  } else {
-                    handleAIGenerateDynamic(target.babKey, target.id, target.displayTitle, prompt);
-                  }
-                }}
-                className="bg-indigo-600 hover:bg-indigo-700 px-5 py-2 rounded-lg font-bold text-white flex items-center gap-1.5 shadow-md shadow-indigo-650/10"
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                Tulis dengan Prompt
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* FLOATING TOAST NOTIFICATION */}
-      {toast.show && (
-        <div className={`fixed bottom-6 right-6 border ${toast.isError ? 'bg-red-900/80 border-red-500 text-red-100' : 'bg-slate-900/95 border-slate-800 text-slate-100'} backdrop-blur-md px-4 py-3 rounded-xl flex items-center gap-3 shadow-2xl z-50 transition-all max-w-sm no-print`}>
-          {toast.isError ? <AlertCircle className="h-5 w-5 text-red-400 shrink-0" /> : <Info className="h-5 w-5 text-indigo-400 shrink-0" />}
-          <span className="text-xs font-semibold">{toast.message}</span>
-        </div>
-      )}
-
-      {/* WELCOME / GET STARTED MODAL */}
-      {showWelcomeModal && (
-        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center z-50 no-print text-slate-100 p-4">
-          <div className="bg-slate-900 border border-slate-800/80 rounded-2xl w-[680px] max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            
-            {/* Header */}
-            <div className="p-8 border-b border-slate-800/60 text-center relative bg-gradient-to-b from-indigo-500/10 to-transparent">
-              <div className="inline-flex p-3 bg-indigo-500/10 rounded-2xl mb-3 text-indigo-400 border border-indigo-500/20">
-                <GraduationCap className="h-8 w-8" />
-              </div>
-              <h2 className="text-xl font-bold text-slate-100 tracking-tight">SatSet Thesis Builder v2.0</h2>
-              <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto leading-relaxed">
-                Platform penataan format tugas akhir dan skripsi otomatis berbasis standar akademik nasional Indonesia.
-              </p>
-            </div>
-
-            {/* Content Body */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              
-              {/* Options Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                
-                <div 
-                  onClick={handleCreateNewBlankDraft}
-                  className="group relative p-5 bg-slate-950 border border-slate-850 hover:border-indigo-500/80 rounded-xl cursor-pointer transition-all flex flex-col justify-between hover:shadow-[0_0_15px_-3px_rgba(99,102,241,0.2)]"
-                >
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <div className="p-1.5 bg-indigo-500/10 rounded-lg text-indigo-400 group-hover:bg-indigo-50 group-hover:text-white transition-all">
-                        <Plus className="h-4 w-4" />
-                      </div>
-                      <h3 className="font-bold text-xs text-slate-200 group-hover:text-indigo-400 transition-colors">Template Skripsi Standar</h3>
-                    </div>
-                    <p className="text-[10px] text-slate-400 leading-normal">
-                      Mulai dengan struktur lengkap BAB I–V beserta sub-bab standar (Latar Belakang, Rumusan Masalah, dll.) sesuai format akademik nasional.
-                    </p>
-                  </div>
-                  <div className="mt-4 text-[9px] font-bold text-indigo-500 flex items-center gap-1 group-hover:translate-x-1 transition-transform">
-                    Gunakan Template →
-                  </div>
-                </div>
-
-                <div 
-                  onClick={handleCreateBlankDocument}
-                  className="group relative p-5 bg-slate-950 border border-slate-850 hover:border-indigo-500/80 rounded-xl cursor-pointer transition-all flex flex-col justify-between hover:shadow-[0_0_15px_-3px_rgba(99,102,241,0.2)]"
-                >
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <div className="p-1.5 bg-slate-500/10 rounded-lg text-slate-300 group-hover:bg-slate-50 group-hover:text-slate-900 transition-all">
-                        <FileText className="h-4 w-4" />
-                      </div>
-                      <h3 className="font-bold text-xs text-slate-200 group-hover:text-indigo-400 transition-colors">Dokumen Kosong</h3>
-                    </div>
-                    <p className="text-[10px] text-slate-400 leading-normal">
-                      Satu halaman kosong tanpa outline, daftar isi, atau struktur BAB apa pun. Cocok untuk menulis bebas dari nol.
-                    </p>
-                  </div>
-                  <div className="mt-4 text-[9px] font-bold text-indigo-500 flex items-center gap-1 group-hover:translate-x-1 transition-transform">
-                    Mulai Kosong →
-                  </div>
-                </div>
-
-                <div 
-                  onClick={() => setShowOutlineBuilder(true)}
-                  className="group relative p-5 bg-slate-950 border border-slate-850 hover:border-indigo-500/80 rounded-xl cursor-pointer transition-all flex flex-col justify-between hover:shadow-[0_0_15px_-3px_rgba(99,102,241,0.2)]"
-                >
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <div className="p-1.5 bg-amber-500/10 rounded-lg text-amber-400 group-hover:bg-amber-50 group-hover:text-amber-900 transition-all">
-                        <ListChecks className="h-4 w-4" />
-                      </div>
-                      <h3 className="font-bold text-xs text-slate-200 group-hover:text-amber-400 transition-colors">Dengan Outline</h3>
-                    </div>
-                    <p className="text-[10px] text-slate-400 leading-normal">
-                      Tentukan sendiri struktur BAB dan sub-bab yang diinginkan, lalu sistem membuat kerangka dokumen sesuai outline Anda.
-                    </p>
-                  </div>
-                  <div className="mt-4 text-[9px] font-bold text-amber-500 flex items-center gap-1 group-hover:translate-x-1 transition-transform">
-                    Atur Outline →
-                  </div>
-                </div>
-
-                {hasLocalDraft ? (
-                  <div 
-                    onClick={() => setShowWelcomeModal(false)}
-                    className="group relative p-5 bg-slate-950 border border-slate-850 hover:border-indigo-500/80 rounded-xl cursor-pointer transition-all flex flex-col justify-between hover:shadow-[0_0_15px_-3px_rgba(99,102,241,0.2)]"
-                  >
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <div className="p-1.5 bg-emerald-500/10 rounded-lg text-emerald-400 group-hover:bg-emerald-50 group-hover:text-white transition-all">
-                          <RotateCcw className="h-4 w-4" />
-                        </div>
-                        <h3 className="font-bold text-xs text-slate-200 group-hover:text-emerald-400 transition-colors">Lanjutkan Sesi Terakhir</h3>
-                      </div>
-                      <p className="text-[10px] text-slate-400 leading-normal">
-                        Lanjutkan pengerjaan dokumen dari sesi terakhir Anda yang tersimpan secara lokal di browser Anda saat ini.
-                      </p>
-                    </div>
-                    <div className="mt-4 text-[9px] font-bold text-emerald-500 flex items-center gap-1 group-hover:translate-x-1 transition-transform">
-                      Lanjutkan Kerja →
-                    </div>
-                  </div>
-                ) : (
-                  <label 
-                    className="group relative p-5 bg-slate-950 border border-slate-850 hover:border-indigo-500/80 rounded-xl cursor-pointer transition-all flex flex-col justify-between hover:shadow-[0_0_15px_-3px_rgba(99,102,241,0.2)]"
-                  >
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <div className="p-1.5 bg-indigo-500/10 rounded-lg text-indigo-400 group-hover:bg-indigo-50 group-hover:text-white transition-all">
-                          <FolderOpen className="h-4 w-4" />
-                        </div>
-                        <h3 className="font-bold text-xs text-slate-200 group-hover:text-indigo-400 transition-colors">Impor dari file Word</h3>
-                      </div>
-                      <p className="text-[10px] text-slate-400 leading-normal">
-                        Unggah file dokumen Microsoft Word (.docx) Anda. Sistem akan memindai isi halaman dan memetakan struktur bab secara otomatis.
-                      </p>
-                    </div>
-                    <div className="mt-4 text-[9px] font-bold text-indigo-500 flex items-center gap-1">
-                      Pilih File DOCX...
-                    </div>
-                    <input 
-                      type="file" 
-                      accept=".docx,.doc" 
-                      className="hidden" 
-                      onChange={handleDocxImport} 
-                    />
-                  </label>
-                )}
-
-              </div>
-
-              {/* Already Have a Draft: Database / Upload Option */}
-              <div className="border-t border-slate-800/60 pt-5 space-y-4">
-                <div className="flex justify-between items-center">
-                  <h4 className="font-bold text-xs text-slate-400 flex items-center gap-1.5">
-                    <Database className="h-4 w-4 text-indigo-400" />
-                    Buka Draft dari Database
-                  </h4>
-                  {hasLocalDraft && (
-                    <label className="text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer flex items-center gap-1">
-                      <FolderOpen className="h-3 w-3" />
-                      Upload DOCX
-                      <input 
-                        type="file" 
-                        accept=".docx,.doc" 
-                        className="hidden" 
-                        onChange={handleDocxImport} 
-                      />
-                    </label>
-                  )}
-                </div>
-
-                <div className="max-h-[220px] overflow-y-auto space-y-2 pr-1">
-                  {loadingDrafts ? (
-                    <div className="flex flex-col items-center justify-center py-6 gap-2 text-slate-400">
-                      <Loader2 className="h-5 w-5 animate-spin text-indigo-500" />
-                      <span className="text-[10px]">Memuat daftar draft...</span>
-                    </div>
-                  ) : draftsList.length === 0 ? (
-                    <div className="text-center py-8 text-slate-500 italic text-[10px] bg-slate-950/40 border border-slate-850 rounded-xl">
-                      Belum ada draft tersimpan di database.
-                    </div>
-                  ) : (
-                    draftsList.map((item) => (
-                      <div 
-                        key={item.key} 
-                        onClick={() => handleLoadDraftDB(item)}
-                        className="p-3 rounded-lg border border-slate-850 hover:border-indigo-500 bg-slate-950/40 hover:bg-slate-950 flex justify-between items-center cursor-pointer transition-all text-xs"
-                      >
-                        <div className="flex-1 min-w-0 pr-4">
-                          <h5 className="font-bold text-[11px] truncate text-slate-200">"{item.title}"</h5>
-                          <p className="text-[9px] text-slate-400 mt-0.5">Penulis: {item.author} • {item.updated_at}</p>
-                        </div>
-                        
-                        <div className="flex items-center gap-2">
-                          <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${item.source === 'database' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-blue-500/10 text-blue-400'}`}>
-                            {item.source}
-                          </span>
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteDraftDB(e, item);
-                            }} 
-                            className="p-1 hover:bg-slate-850 text-slate-500 hover:text-red-500 rounded"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* OUTLINE BUILDER MODAL */}
-      {showOutlineBuilder && (
-        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center z-[60] no-print text-slate-100 p-4">
-          <div className="bg-slate-900 border border-slate-800/80 rounded-2xl w-[560px] max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            <div className="p-5 border-b border-slate-800/60 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 bg-amber-500/10 rounded-lg text-amber-400">
-                  <ListChecks className="h-4 w-4" />
-                </div>
-                <h3 className="font-bold text-sm text-slate-100">Atur Outline Dokumen</h3>
-              </div>
-              <button onClick={() => setShowOutlineBuilder(false)} className="text-slate-400 hover:text-slate-200 text-xs">Tutup</button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-5 space-y-3">
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                Tulis kerangka dokumen Anda. <span className="text-slate-200 font-semibold">Baris tanpa indentasi</span> menjadi judul BAB, 
-                dan <span className="text-slate-200 font-semibold">baris yang diawali spasi atau tanda "-"</span> menjadi sub-bab di bawahnya. Maksimal 5 BAB.
-              </p>
-              <textarea
-                value={outlineText}
-                onChange={(e) => setOutlineText(e.target.value)}
-                rows={12}
-                spellCheck={false}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs font-mono text-slate-200 leading-relaxed focus:outline-none focus:border-amber-500/60"
-                placeholder={'BAB I PENDAHULUAN\n  Latar Belakang\n  Rumusan Masalah\nBAB II TINJAUAN PUSTAKA\n  Landasan Teori'}
-              />
-              <div className="text-[10px] text-slate-500 bg-slate-950/60 border border-slate-850 rounded-lg p-2.5 leading-relaxed">
-                Contoh:
-                <pre className="mt-1 text-slate-400 whitespace-pre-wrap">{`BAB I PENDAHULUAN
-  Latar Belakang
-  Rumusan Masalah
-BAB II TINJAUAN PUSTAKA
-  Landasan Teori`}</pre>
-              </div>
-            </div>
-
-            <div className="p-4 border-t border-slate-800/60 flex justify-end gap-2">
-              <button
-                onClick={() => setShowOutlineBuilder(false)}
-                className="px-4 py-2 rounded-lg text-xs font-bold text-slate-300 hover:bg-slate-800 transition-colors"
-              >
-                Batal
-              </button>
-              <button
-                onClick={handleCreateOutlineDocument}
-                className="px-4 py-2 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-400 text-amber-950 transition-colors flex items-center gap-1.5"
-              >
-                <Check className="h-3.5 w-3.5" />
-                Buat Dokumen
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <OutlineBuilderModal
+        show={showOutlineBuilder}
+        outlineText={outlineText}
+        onOutlineTextChange={setOutlineText}
+        onClose={() => setShowOutlineBuilder(false)}
+        onCreate={handleCreateOutlineDocument}
+      />
     </>
   );
 }

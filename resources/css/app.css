@@ -15,6 +15,37 @@
   overflow: hidden;
 }
 
+.show-margin-guide .a4-page::after {
+  content: "";
+  position: absolute;
+  top: var(--doc-margin-top, 4cm);
+  right: var(--doc-margin-right, 3cm);
+  bottom: var(--doc-margin-bottom, 3cm);
+  left: var(--doc-margin-left, 4cm);
+  border: 1.5px dashed rgba(79, 70, 229, 0.8);
+  background:
+    linear-gradient(rgba(79, 70, 229, 0.08), rgba(79, 70, 229, 0.08));
+  box-shadow: 0 0 0 9999px rgba(79, 70, 229, 0.035);
+  pointer-events: none;
+  z-index: 25;
+}
+
+.show-margin-guide .a4-page::before {
+  content: "Margin";
+  position: absolute;
+  top: calc(var(--doc-margin-top, 4cm) - 18px);
+  left: var(--doc-margin-left, 4cm);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(79, 70, 229, 0.9);
+  color: #ffffff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1;
+  pointer-events: none;
+  z-index: 26;
+}
+
 .a4-page *,
 .a4-page p,
 .a4-page span,
@@ -98,6 +129,11 @@
 
 /* Print Specific Optimizations */
 @media print {
+  .show-margin-guide .a4-page::before,
+  .show-margin-guide .a4-page::after {
+    display: none !important;
+  }
+
   /* Reset outer layout structures for printing */
   html, body, #app, main {
     height: auto !important;
