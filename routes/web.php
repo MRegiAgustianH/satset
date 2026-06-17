@@ -13,6 +13,7 @@ Route::prefix('thesis')->group(function () {
     Route::post('/recommend-titles', [ThesisController::class, 'recommendTitles'])->name('thesis.recommend_titles');
     Route::post('/generate', [ThesisController::class, 'generateSection'])->name('thesis.generate');
     Route::post('/save', [ThesisController::class, 'saveDraft'])->name('thesis.save');
+    Route::post('/save-chunk', [ThesisController::class, 'saveDraftChunk'])->name('thesis.save_chunk');
     Route::get('/list', [ThesisController::class, 'listDrafts'])->name('thesis.list');
     Route::post('/load', [ThesisController::class, 'loadDraft'])->name('thesis.load');
     Route::post('/delete', [ThesisController::class, 'deleteDraft'])->name('thesis.delete');

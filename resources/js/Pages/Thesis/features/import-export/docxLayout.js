@@ -191,6 +191,33 @@ export async function extractDocxLayout(arrayBuffer) {
   }
 }
 
+export async function extractDocxMetadata(arrayBuffer) {
+  try {
+    const { default: JSZip } = await import('jszip');
+    const zip = await JSZip.loadAsync(arrayBuffer);
+    const appXml = await zip.file('docProps/app.xml')?.async('string');
+    const documentXml = await zip.file('word/document.xml')?.async('string');
+
+    const pagesMatch = appXml?.match(/<Pages>(\d+)<\/Pages>/i);
+    const pageCount = pagesMatch ? parseInt(pagesMatch[1], 10) : null;
+    const manualPageBreakCount = documentXml
+      ? (documentXml.match(/<w:br\b[^>]*(?:w:)?type="page"[^>]*>/gi) || []).length
+      : 0;
+    const renderedPageBreakCount = documentXml
+      ? (documentXml.match(/<w:lastRenderedPageBreak\b/gi) || []).length
+      : 0;
+
+    return {
+      pageCount: Number.isFinite(pageCount) ? pageCount : null,
+      manualPageBreakCount,
+      renderedPageBreakCount,
+    };
+  } catch (error) {
+    console.warn('Failed to extract DOCX metadata:', error);
+    return { pageCount: null, manualPageBreakCount: 0, renderedPageBreakCount: 0 };
+  }
+}
+
 export const DOCX_MAMMOTH_STYLE_MAP = [
   "p[style-name='Title'] => h1:fresh",
   "p[style-name='Judul'] => h1:fresh",

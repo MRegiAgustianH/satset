@@ -414,15 +414,93 @@ Pastikan respon Anda murni merupakan string JSON yang valid agar dapat diproses 
             'draft_data' => 'required|array'
         ]);
 
-        $filename = $request->input('filename');
-        $draftData = $request->input('draft_data');
+        return $this->persistDraftData(
+            $request->input('filename'),
+            $request->input('draft_data')
+        );
+    }
 
+    /**
+     * Save a large draft through small chunks so it is not blocked by PHP post_max_size.
+     */
+    public function saveDraftChunk(Request $request)
+    {
+        $request->validate([
+            'filename' => 'required|string|max:255',
+            'upload_id' => 'required|string|max:80|regex:/^[A-Za-z0-9_-]+$/',
+            'chunk_index' => 'required|integer|min:0',
+            'total_chunks' => 'required|integer|min:1|max:500',
+            'chunk' => 'required|string',
+        ]);
+
+        $filename = $request->input('filename');
+        $uploadId = $request->input('upload_id');
+        $chunkIndex = (int) $request->input('chunk_index');
+        $totalChunks = (int) $request->input('total_chunks');
+        $chunk = $request->input('chunk');
+
+        if ($chunkIndex >= $totalChunks) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Urutan chunk draft tidak valid.'
+            ], 422);
+        }
+
+        $chunkDir = "thesis_draft_chunks/{$uploadId}";
+        Storage::put("{$chunkDir}/{$chunkIndex}.part", $chunk);
+
+        $storedChunks = Storage::files($chunkDir);
+        if (count($storedChunks) < $totalChunks) {
+            return response()->json([
+                'success' => true,
+                'complete' => false,
+                'message' => 'Chunk draft diterima.',
+                'chunk_index' => $chunkIndex,
+                'total_chunks' => $totalChunks,
+            ], 202);
+        }
+
+        $json = '';
+        for ($i = 0; $i < $totalChunks; $i++) {
+            $chunkPath = "{$chunkDir}/{$i}.part";
+            if (!Storage::exists($chunkPath)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "Chunk draft ke-{$i} belum lengkap."
+                ], 422);
+            }
+            $json .= Storage::get($chunkPath);
+        }
+
+        Storage::deleteDirectory($chunkDir);
+
+        $draftData = json_decode($json, true);
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($draftData)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Draft besar gagal dirakit. Data JSON tidak valid.'
+            ], 422);
+        }
+
+        return $this->persistDraftData($filename, $draftData, true);
+    }
+
+    private function persistDraftData(string $filename, array $draftData, bool $chunked = false)
+    {
         // Clean filename for safety
-        $safeFilename = Str::slug($filename, '_');
+        $safeFilename = Str::slug($filename, '_') ?: 'draft_skripsi';
+
+        $jsonDraft = json_encode($draftData, JSON_PRETTY_PRINT);
+        if ($jsonDraft === false) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengubah draft menjadi JSON.'
+            ], 422);
+        }
 
         // 1. Save to File Storage as Backup
         try {
-            Storage::put("thesis_drafts/{$safeFilename}.json", json_encode($draftData, JSON_PRETTY_PRINT));
+            Storage::put("thesis_drafts/{$safeFilename}.json", $jsonDraft);
             $fileSaved = true;
         } catch (\Exception $e) {
             Log::error('File save failed: ' . $e->getMessage());
@@ -449,8 +527,10 @@ Pastikan respon Anda murni merupakan string JSON yang valid agar dapat diproses 
         if ($fileSaved || $dbSaved) {
             return response()->json([
                 'success' => true,
-                'message' => 'Draft berhasil disimpan ' . ($dbSaved ? 'ke Database' : '') . ($fileSaved ? ' dan Penyimpanan Lokal' : '') . '.',
-                'filename' => $safeFilename
+                'message' => 'Draft berhasil disimpan ' . ($dbSaved ? 'ke Database' : '') . ($fileSaved ? ' dan Penyimpanan Lokal' : '') . ($chunked ? ' (mode chunk untuk draft besar)' : '') . '.',
+                'filename' => $safeFilename,
+                'slug' => $safeFilename,
+                'save_mode' => $chunked ? 'chunked' : 'direct',
             ]);
         }
 

@@ -1,22 +1,35 @@
-import { getCsrfToken } from '../utils/http';
+import { getCsrfToken, jsonHeaders } from '../utils/http';
 
 const geminiHeaders = (apiKey) => ({
-  'Content-Type': 'application/json',
+  ...jsonHeaders(),
   'X-Gemini-Key': apiKey,
 });
 
+const formHeaders = () => {
+  const token = getCsrfToken();
+  const headers = {
+    Accept: 'application/json',
+    'X-Requested-With': 'XMLHttpRequest',
+  };
+
+  if (token) {
+    headers['X-CSRF-TOKEN'] = token;
+  }
+
+  return headers;
+};
+
 export const parseGuideRequest = (formData) => fetch('/thesis/parse-guide', {
   method: 'POST',
-  headers: {
-    Accept: 'application/json',
-    'X-XSRF-TOKEN': getCsrfToken(),
-  },
+  headers: formHeaders(),
+  credentials: 'same-origin',
   body: formData,
 });
 
 export const recommendTitlesRequest = (apiKey, { fakultas, prodi, topik }) => fetch('/thesis/recommend-titles', {
   method: 'POST',
   headers: geminiHeaders(apiKey),
+  credentials: 'same-origin',
   body: JSON.stringify({
     fakultas,
     prodi,
@@ -27,6 +40,7 @@ export const recommendTitlesRequest = (apiKey, { fakultas, prodi, topik }) => fe
 export const searchCitationRequest = (apiKey, { query, yearStart, yearEnd }) => fetch('/thesis/search-citation', {
   method: 'POST',
   headers: geminiHeaders(apiKey),
+  credentials: 'same-origin',
   body: JSON.stringify({
     query,
     year_start: yearStart,
@@ -37,5 +51,6 @@ export const searchCitationRequest = (apiKey, { query, yearStart, yearEnd }) => 
 export const generateSectionRequest = (apiKey, payload) => fetch('/thesis/generate', {
   method: 'POST',
   headers: geminiHeaders(apiKey),
+  credentials: 'same-origin',
   body: JSON.stringify(payload),
 });

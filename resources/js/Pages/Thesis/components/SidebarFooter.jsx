@@ -3,6 +3,9 @@ import { FileText, FolderOpen, Printer, Save } from 'lucide-react';
 
 export default function SidebarFooter({
   saveFilename,
+  activeDraftSlug,
+  targetDraftSlug,
+  saveStatus,
   autosaveEnabled,
   onSaveFilenameChange,
   onSaveDraft,
@@ -11,6 +14,18 @@ export default function SidebarFooter({
   onImportDocx,
 }) {
   const isUnsaved = !saveFilename || saveFilename === 'Draft_Skripsi';
+  const formatBytes = (bytes) => {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '';
+    const mb = bytes / (1024 * 1024);
+    return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  };
+  const statusTone = saveStatus?.state === 'error'
+    ? 'text-red-500'
+    : saveStatus?.state === 'saving'
+      ? 'text-indigo-500'
+      : saveStatus?.state === 'saved'
+        ? 'text-emerald-500'
+        : 'text-slate-400';
 
   return (
     <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/40 space-y-3">
@@ -24,6 +39,35 @@ export default function SidebarFooter({
         <span className="shrink-0 font-bold uppercase tracking-wide">
           {isUnsaved ? 'Manual' : (autosaveEnabled ? 'Autosave' : 'Manual')}
         </span>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-2.5 py-2 text-[10px] space-y-1">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-slate-400">Slug aktif</span>
+          <span className="font-mono text-slate-700 dark:text-slate-300 truncate max-w-[150px]" title={activeDraftSlug || 'Belum ada slug server'}>
+            {activeDraftSlug || '-'}
+          </span>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-slate-400">Slug target</span>
+          <span className={`font-mono truncate max-w-[150px] ${activeDraftSlug && activeDraftSlug !== targetDraftSlug ? 'text-amber-500' : 'text-slate-700 dark:text-slate-300'}`} title={targetDraftSlug}>
+            {targetDraftSlug}
+          </span>
+        </div>
+        <div className={`flex items-center justify-between gap-2 ${statusTone}`}>
+          <span className="font-semibold truncate">{saveStatus?.message || 'Belum disimpan ke server'}</span>
+          {saveStatus?.bytes > 0 && (
+            <span className="font-mono shrink-0">{formatBytes(saveStatus.bytes)}</span>
+          )}
+        </div>
+        {saveStatus?.progress != null && (
+          <div className="h-1.5 rounded-full bg-slate-100 dark:bg-slate-850 overflow-hidden">
+            <div className="h-full bg-indigo-500 transition-all" style={{ width: `${saveStatus.progress}%` }} />
+          </div>
+        )}
+        <div className="text-[9px] leading-snug text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-850 pt-1.5">
+          Manual: tombol Simpan menulis ke slug target. Autosave: setelah save/load dikonfirmasi, perubahan menimpa slug aktif yang sama.
+        </div>
       </div>
 
       <div className="flex gap-2">

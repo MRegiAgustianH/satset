@@ -2,30 +2,36 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Head } from '@inertiajs/react';
 import {
   GraduationCap, Moon, Sun, Sliders, FileText, BookOpen, Sparkles,
-  FolderOpen, ZoomIn, ZoomOut,
   Loader2, Plus, Trash2, Search, Table, Image as ImageIcon,
-  Compass, List, RotateCcw, Wand2,
-  PanelLeftClose, PanelLeftOpen,
-  Bold, Italic, Underline, Strikethrough, RemoveFormatting,
-  ListOrdered, Scissors, Copy, ClipboardPaste, Ruler
+  Compass, RotateCcw, Wand2,
+  PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 import { SECTION_GROUPS } from './constants/sectionGroups';
 import { cleanLineBreaks } from './utils/documentText';
+import { readJsonResponse } from './utils/http';
 import {
   computeMaskedCells,
   computeMaskedHeaders,
   normalizeHeaders,
   normalizeTableRows,
 } from './utils/table';
-import { DOCX_MAMMOTH_STYLE_MAP, extractDocxLayout, extractDocxSnapshot, extractDraftSnapshotFromHtml } from './features/import-export/docxLayout';
+import { createWordImportHandler } from './features/import-export/wordImport';
 import { downloadHtmlAsDocx } from './features/import-export/docxExport';
 import { buildCoverWordHtml, buildTableWordHtml as buildWordTableHtml } from './features/import-export/wordHtmlBuilders';
-import { buildBabPagesMap, paginateListEntries, resolveBlockNumberingForBab } from './features/document-preview/layout';
+import {
+  buildBabPagesMap,
+  convertToAlpha,
+  getDefaultNumberingStyleForHeading,
+  paginateListEntries,
+  resolveBlockNumberingForBab,
+} from './features/document-preview/layout';
 import {
   deleteDraftRequest,
+  getDraftPayloadSize,
   listDraftsRequest,
   loadDraftRequest,
   saveDraftRequest,
+  slugifyDraftFilename,
 } from './services/draftApi';
 import {
   generateSectionRequest,
@@ -48,6 +54,8 @@ import SidebarFooter from './components/SidebarFooter';
 import NavigationPanel from './components/NavigationPanel';
 import LayoutSettingsPanel from './components/LayoutSettingsPanel';
 import ToastNotification from './components/ToastNotification';
+import InlineEditorToolbar from './components/InlineEditorToolbar';
+import DocumentCanvas from './components/DocumentCanvas';
 
 const escapeHtml = (unsafe) => {
   if (!unsafe) return '';
@@ -57,6 +65,18 @@ const escapeHtml = (unsafe) => {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+};
+
+const formatBytes = (bytes) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 };
 
 // Lightweight memoization for pure (string -> string) renderers.
@@ -730,11 +750,121 @@ export default function Index() {
     });
   };
 
+  const getSectionParagraphIndent = (section = {}) => {
+    const defaultFirstLineIndent = layout.paragraphIndent === 'indented' ? 1.25 : 0;
+    const leftIndent = Number.isFinite(parseFloat(section.leftIndentCm)) ? parseFloat(section.leftIndentCm) : 0;
+    const rightIndent = Number.isFinite(parseFloat(section.rightIndentCm)) ? parseFloat(section.rightIndentCm) : 0;
+    const firstLineIndent = Number.isFinite(parseFloat(section.firstLineIndentCm))
+      ? parseFloat(section.firstLineIndentCm)
+      : defaultFirstLineIndent;
+
+    return {
+      leftIndent,
+      rightIndent,
+      firstLineIndent,
+      textIndent: firstLineIndent - leftIndent,
+    };
+  };
+
+  const getSectionParagraphStyle = (section = {}) => {
+    const { leftIndent, rightIndent, textIndent } = getSectionParagraphIndent(section);
+    return {
+      marginLeft: `${leftIndent}cm`,
+      marginRight: `${rightIndent}cm`,
+      textIndent: `${textIndent}cm`,
+    };
+  };
+
   // ==========================================================================
   // INLINE EDITOR — WORD-LIKE FORMATTING HELPERS (Font / Paragraph / Clipboard)
   // Operate on the active <textarea> selection of a section's content.
   // ==========================================================================
   const getActiveTextarea = (sec) => document.getElementById(`inline-textarea-${sec.id}`);
+
+  const getTextParagraphRanges = (content = '') => {
+    const ranges = [];
+    const regex = /[^\n]+/g;
+    let match;
+
+    while ((match = regex.exec(content)) !== null) {
+      if (!match[0].trim()) continue;
+      ranges.push({
+        index: ranges.length,
+        start: match.index,
+        end: match.index + match[0].length,
+      });
+    }
+
+    return ranges;
+  };
+
+  const getParagraphAlignment = (section = {}, paragraphIndex, fallback = 'justify') => (
+    section.paragraphAlignments?.[paragraphIndex] || section.textAlign || fallback
+  );
+
+  const getSelectedParagraphIndexes = (content, selectionStart, selectionEnd) => {
+    const ranges = getTextParagraphRanges(content);
+    if (!ranges.length) return [];
+
+    const start = Math.min(selectionStart, selectionEnd);
+    const end = Math.max(selectionStart, selectionEnd);
+
+    if (start === end) {
+      const exact = ranges.find((range) => start >= range.start && start <= range.end);
+      if (exact) return [exact.index];
+
+      const previous = [...ranges].reverse().find((range) => range.end <= start);
+      if (previous) return [previous.index];
+
+      return [ranges[0].index];
+    }
+
+    const inclusiveEnd = Math.max(start, end - 1);
+    const selected = ranges
+      .filter((range) => range.end > start && range.start <= inclusiveEnd)
+      .map((range) => range.index);
+
+    return selected.length ? selected : [ranges[0].index];
+  };
+
+  const applyParagraphAlignment = (babKey, sec, align) => {
+    const textarea = getActiveTextarea(sec);
+    const content = textarea?.value ?? sec.content ?? '';
+    const selectionStart = textarea?.selectionStart ?? 0;
+    const selectionEnd = textarea?.selectionEnd ?? selectionStart;
+    const targetIndexes = getSelectedParagraphIndexes(content, selectionStart, selectionEnd);
+
+    setBabSections(prev => {
+      const updatedList = prev[babKey].map(item => {
+        if (item.id !== sec.id) return item;
+
+        if (!targetIndexes.length) {
+          return { ...item, content, textAlign: align };
+        }
+
+        const nextAlignments = { ...(item.paragraphAlignments || {}) };
+        targetIndexes.forEach((paragraphIndex) => {
+          nextAlignments[paragraphIndex] = align;
+        });
+
+        return {
+          ...item,
+          content,
+          paragraphAlignments: nextAlignments,
+        };
+      });
+      const updated = { ...prev, [babKey]: updatedList };
+      saveLocalDraft({ babSections: updated });
+      return updated;
+    });
+
+    if (textarea) {
+      setTimeout(() => {
+        textarea.focus();
+        textarea.setSelectionRange(selectionStart, selectionEnd);
+      }, 50);
+    }
+  };
 
   // Wrap the current selection with markers (e.g. ** for bold). Toggles off if already wrapped.
   const wrapInlineSelection = (babKey, sec, before, after = before, placeholder = 'teks') => {
@@ -780,13 +910,19 @@ export default function Index() {
     // Detect if all non-empty lines already have the target prefix → toggle off
     const allBulleted = lines.filter(l => l.trim()).every(l => /^\s*[-*•]\s+/.test(l));
     const allNumbered = lines.filter(l => l.trim()).every(l => /^\s*\d+[.)]\s+/.test(l));
+    const allAlpha = lines.filter(l => l.trim()).every(l => /^\s*[a-zA-Z]+[.)]\s+/.test(l));
     let counter = 0;
     const newLines = lines.map(ln => {
       if (!ln.trim()) return ln;
-      const bare = ln.replace(stripRe, '');
+      const bare = ln.replace(stripRe, '').replace(/^\s*[a-zA-Z]+[.)]\s+/, '');
       if (mode === 'bullet') {
         if (allBulleted) return bare; // toggle off
         return '- ' + bare;
+      } else if (mode === 'alpha') {
+        const bareAlpha = ln.replace(/^\s*(?:[-*]\s+|\d+[.)]\s+|[a-zA-Z]+[.)]\s+)/, '');
+        if (allAlpha) return bareAlpha; // toggle off
+        counter++;
+        return `${convertToAlpha(counter)}. ` + bareAlpha;
       } else { // numbered
         if (allNumbered) return bare; // toggle off
         counter++;
@@ -1104,6 +1240,7 @@ export default function Index() {
             
             const sec = babSections[babKey]?.find(x => x.id === el.blockId);
             if (!sec) return null;
+            const sectionParagraphStyle = getSectionParagraphStyle(sec);
             
             return (
               <div 
@@ -1160,11 +1297,14 @@ export default function Index() {
                       fontFamily: 'var(--doc-font-family, "Times New Roman", Times, serif)',
                       fontSize: 'var(--doc-font-size, 12pt)',
                       lineHeight: 'var(--doc-line-spacing, 2.0)',
-                      textAlign: 'justify',
-                      textIndent: (!sec.headingLevel && layout.paragraphIndent === 'indented') ? '1.25cm' : '0px',
+                      textAlign: sec.textAlign || layout.textAlign || 'justify',
+                      margin: 0,
+                      textIndent: sectionParagraphStyle.textIndent,
+                      marginLeft: sectionParagraphStyle.marginLeft,
+                      marginRight: sectionParagraphStyle.marginRight,
+                      width: `calc(100% - ${sectionParagraphStyle.marginLeft} - ${sectionParagraphStyle.marginRight})`,
                       resize: 'none',
                       padding: 0,
-                      margin: 0,
                       color: '#000000',
                       overflow: 'hidden',
                     }}
@@ -1193,13 +1333,21 @@ export default function Index() {
           }
           
           if (el.type === 'paragraph') {
+            const paragraphAlign = el.textAlign || layout.textAlign || 'justify';
+            const paragraphIndentStyle = getSectionParagraphStyle(el);
             const listMatch = el.text.match(/^([0-9a-zA-Z]+[\.\)])\s+(.*)$/);
             if (listMatch) {
               return (
                 <div 
                   key={idx} 
-                  className="flex pr-1 text-justify items-start cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group relative animate-in fade-in duration-100" 
-                  style={{ textIndent: 0, marginBottom: 0 }}
+                  className="flex pr-1 items-start cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group relative animate-in fade-in duration-100" 
+                  style={{
+                    textIndent: 0,
+                    marginBottom: 0,
+                    textAlign: paragraphAlign,
+                    marginLeft: paragraphIndentStyle.marginLeft,
+                    marginRight: paragraphIndentStyle.marginRight,
+                  }}
                   onClick={(e) => {
                     e.stopPropagation();
                     handleEditBlockInline(babKey, el.blockId);
@@ -1207,7 +1355,7 @@ export default function Index() {
                   title="Klik untuk edit langsung"
                 >
                   <span className="w-8 shrink-0 font-bold text-slate-800">{listMatch[1]}</span>
-                  <span className="flex-1 min-w-0 text-justify text-slate-900" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(listMatch[2]) }} />
+                  <span className="flex-1 min-w-0 text-slate-900" style={{ textAlign: paragraphAlign }} dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(listMatch[2]) }} />
                   <span className="absolute -top-3 right-1 bg-indigo-600 text-white text-[8px] font-bold px-1 rounded opacity-0 group-hover:opacity-100 transition-opacity no-print">Klik untuk edit</span>
                 </div>
               );
@@ -1217,15 +1365,22 @@ export default function Index() {
               return (
                 <div 
                   key={idx} 
-                  className="flex pr-1 text-justify items-start cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group relative animate-in fade-in duration-100" 
-                  style={{ textIndent: 0, paddingLeft: '32px', marginBottom: 0 }}
+                  className="flex pr-1 items-start cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group relative animate-in fade-in duration-100" 
+                  style={{
+                    textIndent: 0,
+                    paddingLeft: '32px',
+                    marginBottom: 0,
+                    textAlign: paragraphAlign,
+                    marginLeft: paragraphIndentStyle.marginLeft,
+                    marginRight: paragraphIndentStyle.marginRight,
+                  }}
                   onClick={(e) => {
                     e.stopPropagation();
                     handleEditBlockInline(babKey, el.blockId);
                   }}
                   title="Klik untuk edit langsung"
                 >
-                  <span className="flex-1 min-w-0 text-justify text-slate-900" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(el.text) }} />
+                  <span className="flex-1 min-w-0 text-slate-900" style={{ textAlign: paragraphAlign }} dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(el.text) }} />
                   <span className="absolute -top-3 right-1 bg-indigo-600 text-white text-[8px] font-bold px-1 rounded opacity-0 group-hover:opacity-100 transition-opacity no-print">Klik untuk edit</span>
                 </div>
               );
@@ -1236,7 +1391,9 @@ export default function Index() {
                 key={idx} 
                 className="paragraph-content cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group relative animate-in fade-in duration-100" 
                 style={{
-                  textIndent: el.noIndent ? 0 : undefined,
+                  ...paragraphIndentStyle,
+                  textIndent: el.noIndent ? 0 : paragraphIndentStyle.textIndent,
+                  textAlign: paragraphAlign,
                   marginBottom: 0,
                   overflowWrap: 'anywhere',
                   wordBreak: 'break-word',
@@ -1258,7 +1415,17 @@ export default function Index() {
             const rowsMask = computeMaskedCells(normRows);
 
             return (
-              <div key={idx} className="mt-4 mb-6 leading-relaxed" style={{ textIndent: 0 }}>
+              <div
+                key={idx}
+                className="mt-4 mb-6 leading-relaxed cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group relative"
+                style={{ textIndent: 0 }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleEditBlockInline(babKey, el.blockId);
+                }}
+                title="Klik untuk edit di panel Isi Konten"
+              >
+                <span className="absolute -top-3 right-1 bg-indigo-600 text-white text-[8px] font-bold px-1 rounded opacity-0 group-hover:opacity-100 transition-opacity no-print">Klik untuk edit</span>
                 {/* Caption at the top of academic tables, styled by layout settings */}
                 <div 
                   className="font-bold text-left mb-1" 
@@ -1332,7 +1499,17 @@ export default function Index() {
           if (el.type === 'figure') {
             const figW = el.imgWidth || 12;
             return (
-              <div key={idx} className="mt-4 mb-6 flex flex-col items-center justify-center gap-2" style={{ textIndent: 0 }}>
+              <div
+                key={idx}
+                className="mt-4 mb-6 flex flex-col items-center justify-center gap-2 cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group relative"
+                style={{ textIndent: 0 }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleEditBlockInline(babKey, el.blockId);
+                }}
+                title="Klik untuk edit di panel Isi Konten"
+              >
+                <span className="absolute -top-3 right-1 bg-indigo-600 text-white text-[8px] font-bold px-1 rounded opacity-0 group-hover:opacity-100 transition-opacity no-print">Klik untuk edit</span>
                 {el.imageData ? (
                   /* Uploaded image: sized by user-defined width, height auto (preserves aspect ratio) */
                   <div className="relative group" style={{ width: `${figW}cm`, maxWidth: '100%' }}>
@@ -1612,6 +1789,14 @@ export default function Index() {
     };
     localStorage.setItem('skripsi_laravel_draft_v2', JSON.stringify(blankState));
     setSaveFilename('Draft_Skripsi');
+    setActiveDraftSlug(null);
+    setSaveStatus({
+      state: 'idle',
+      message: 'Draft baru belum disimpan ke server',
+      mode: 'manual',
+      bytes: 0,
+      progress: null,
+    });
     lastSavedPayloadRef.current = '';
     setHasLocalDraft(true);
     setShowWelcomeModal(false);
@@ -1673,6 +1858,14 @@ export default function Index() {
     // overwrite it. Reset to the sentinel name that disables autosave until the
     // user explicitly names & saves this new draft.
     setSaveFilename('Draft_Skripsi');
+    setActiveDraftSlug(null);
+    setSaveStatus({
+      state: 'idle',
+      message: 'Draft baru belum disimpan ke server',
+      mode: 'manual',
+      bytes: 0,
+      progress: null,
+    });
     lastSavedPayloadRef.current = '';
     localStorage.setItem('skripsi_laravel_draft_v2', JSON.stringify(state));
     setHasLocalDraft(true);
@@ -1860,6 +2053,14 @@ export default function Index() {
   const [activeTab, setActiveTab] = useState('layout');
   const [activeSection, setActiveSection] = useState('cover');
   const [saveFilename, setSaveFilename] = useState('Draft_Skripsi');
+  const [activeDraftSlug, setActiveDraftSlug] = useState(null);
+  const [saveStatus, setSaveStatus] = useState({
+    state: 'idle',
+    message: 'Belum disimpan ke server',
+    mode: 'manual',
+    bytes: 0,
+    progress: null,
+  });
   const [autosaveEnabled, setAutosaveEnabled] = useState(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('autosave_setting');
@@ -1870,12 +2071,35 @@ export default function Index() {
 
   const [inlineEditingBlockId, setInlineEditingBlockId] = useState(null);
   const [inlineEditingBabKey, setInlineEditingBabKey] = useState(null);
+  const [focusedContentBlockId, setFocusedContentBlockId] = useState(null);
+
+  const focusContentEditorBlock = (babKey, blockId) => {
+    setSidebarVisible(true);
+    setActiveSection(babKey);
+    setActiveTab('konten');
+    setFocusedContentBlockId(blockId);
+
+    window.setTimeout(() => {
+      const blockElement = document.getElementById(`content-editor-block-${blockId}`);
+      if (blockElement) {
+        blockElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      const focusTarget =
+        document.getElementById(`textarea-content-${blockId}`) ||
+        document.getElementById(`content-title-${blockId}`) ||
+        blockElement?.querySelector('input, textarea, select, button');
+
+      if (focusTarget && typeof focusTarget.focus === 'function') {
+        focusTarget.focus({ preventScroll: true });
+      }
+    }, 120);
+  };
 
   const handleEditBlockInline = (babKey, blockId) => {
     setInlineEditingBlockId(blockId);
     setInlineEditingBabKey(babKey);
-    setActiveSection(babKey);
-    setActiveTab('konten');
+    focusContentEditorBlock(babKey, blockId);
   };
 
   const handlePreviewBackgroundClick = (e) => {
@@ -1958,6 +2182,98 @@ export default function Index() {
       });
     });
     return list;
+  };
+
+  const buildCurrentDraftPayload = (overrides = {}) => {
+    const resolvedBabSections = overrides.babSections || babSections;
+    return {
+      layout,
+      cover,
+      coverElements,
+      babSections: resolvedBabSections,
+      babTitles,
+      references,
+      refStyle,
+      tables: getAllTables(resolvedBabSections),
+      figures: getAllFigures(resolvedBabSections),
+      abstrakIndo,
+      abstrakIndoKeywords,
+      abstrakEng,
+      abstrakEngKeywords,
+      headingStyles,
+      ...overrides,
+    };
+  };
+
+  const saveDraftToServer = async (filename, draftPayload, { source = 'manual', silent = false } = {}) => {
+    const payloadBytes = getDraftPayloadSize(draftPayload);
+    const targetSlug = slugifyDraftFilename(filename);
+
+    setSaveStatus({
+      state: 'saving',
+      message: source === 'autosave' ? 'Autosave berjalan...' : 'Menyimpan draft...',
+      mode: source,
+      bytes: payloadBytes,
+      progress: null,
+      slug: targetSlug,
+    });
+
+    const response = await saveDraftRequest(filename, draftPayload, {
+      onStart: ({ mode, bytes, slug }) => {
+        setSaveStatus({
+          state: 'saving',
+          message: mode === 'chunked'
+            ? `Draft besar ${formatBytes(bytes)} dikirim bertahap...`
+            : `Mengirim draft ${formatBytes(bytes)}...`,
+          mode: source,
+          bytes,
+          progress: mode === 'chunked' ? 0 : null,
+          slug,
+          transport: mode,
+        });
+      },
+      onProgress: ({ percent, current, total }) => {
+        setSaveStatus(prev => ({
+          ...prev,
+          state: 'saving',
+          message: `Mengirim chunk ${current}/${total} (${percent}%)...`,
+          progress: percent,
+          transport: 'chunked',
+        }));
+      },
+    });
+
+    const result = await readJsonResponse(response);
+    if (response.ok && result.success) {
+      const savedSlug = result.slug || result.filename || targetSlug;
+      setActiveDraftSlug(savedSlug);
+      setSaveStatus({
+        state: 'saved',
+        message: source === 'autosave' ? 'Autosave tersimpan' : 'Draft tersimpan',
+        mode: source,
+        bytes: payloadBytes,
+        progress: null,
+        slug: savedSlug,
+        transport: result.save_mode || (payloadBytes > 2.5 * 1024 * 1024 ? 'chunked' : 'direct'),
+      });
+      if (!silent) {
+        showToast(result.message || 'Draft berhasil disimpan.');
+      }
+    } else {
+      setSaveStatus({
+        state: 'error',
+        message: result.message || 'Gagal menyimpan draft.',
+        mode: source,
+        bytes: payloadBytes,
+        progress: null,
+        slug: targetSlug,
+      });
+      if (!silent) {
+        showToast(result.message || 'Gagal menyimpan draft.', true);
+      }
+    }
+
+    return { response, result, payloadString: JSON.stringify(draftPayload), payloadBytes };
   };
 
   const babPagesCacheRef = useRef({ deps: null, value: null });
@@ -2114,17 +2430,13 @@ export default function Index() {
 
   // Auto Save Implementation
   const lastSavedPayloadRef = React.useRef('');
+  const autosaveInFlightRef = React.useRef(false);
   // Filename for which the user has confirmed autosave-overwrite this session
   const autosaveConfirmedRef = React.useRef(null);
 
   useEffect(() => {
     // Initialize the last saved payload ref on mount
-    const initialPayload = {
-      layout, cover, coverElements, babSections, babTitles, references, refStyle,
-      tables: getAllTables(),
-      figures: getAllFigures(),
-      abstrakIndo, abstrakIndoKeywords, abstrakEng, abstrakEngKeywords, headingStyles
-    };
+    const initialPayload = buildCurrentDraftPayload();
     lastSavedPayloadRef.current = JSON.stringify(initialPayload);
   }, []);
 
@@ -2133,22 +2445,26 @@ export default function Index() {
       return;
     }
 
+    const targetSlug = slugifyDraftFilename(saveFilename);
+    if (!activeDraftSlug || activeDraftSlug !== targetSlug) {
+      return;
+    }
+
     const interval = setInterval(async () => {
-      const draftPayload = {
-        layout, cover, coverElements, babSections, babTitles, references, refStyle,
-        tables: getAllTables(),
-        figures: getAllFigures(),
-        abstrakIndo, abstrakIndoKeywords, abstrakEng, abstrakEngKeywords, headingStyles
-      };
+      if (autosaveInFlightRef.current) {
+        return;
+      }
+
+      const draftPayload = buildCurrentDraftPayload();
 
       const payloadString = JSON.stringify(draftPayload);
       if (payloadString !== lastSavedPayloadRef.current) {
         // Confirm once per draft before autosave starts overwriting an existing draft
         if (autosaveConfirmedRef.current !== saveFilename) {
           const ok = window.confirm(
-            `Simpan otomatis (autosave) akan terus menimpa draft "${saveFilename}" dengan perubahan terbaru Anda.\n\n` +
+            `Simpan otomatis (autosave) akan terus menimpa draft "${saveFilename}" (slug: ${targetSlug}) dengan perubahan terbaru Anda.\n\n` +
             `Klik OK untuk MENGIZINKAN autosave ke draft ini.\n` +
-            `Klik Batal untuk MEMATIKAN autosave (gunakan tombol Simpan manual / simpan dengan nama lain).`
+            `Klik Batal untuk MEMATIKAN autosave. Jika ingin simpan sebagai nama baru, ubah nama lalu tekan Simpan manual.`
           );
           if (!ok) {
             setAutosaveEnabled(false);
@@ -2158,23 +2474,27 @@ export default function Index() {
           autosaveConfirmedRef.current = saveFilename;
         }
         try {
-          const response = await saveDraftRequest(saveFilename, draftPayload);
-          const result = await response.json();
+          autosaveInFlightRef.current = true;
+          const { response, result } = await saveDraftToServer(saveFilename, draftPayload, { source: 'autosave', silent: true });
           if (response.ok && result.success) {
             lastSavedPayloadRef.current = payloadString;
             fetchDraftsList();
             console.log("Draft auto-saved successfully.");
+          } else {
+            console.warn("Auto save failed:", result.message || response.statusText);
           }
         } catch (e) {
           console.error("Auto save failed:", e);
+        } finally {
+          autosaveInFlightRef.current = false;
         }
       }
     }, 2000);
 
     return () => clearInterval(interval);
   }, [
-    autosaveEnabled, saveFilename, layout, cover, coverElements, babSections, 
-    references, refStyle, abstrakIndo, abstrakIndoKeywords, 
+    autosaveEnabled, saveFilename, activeDraftSlug, layout, cover, coverElements, babSections, 
+    babTitles, references, refStyle, abstrakIndo, abstrakIndoKeywords, 
     abstrakEng, abstrakEngKeywords, headingStyles
   ]);
 
@@ -2891,11 +3211,14 @@ export default function Index() {
         html += `<h1 class="MsoHeading1" style="mso-outline-level:1; text-align:${h1s.textAlign || 'center'}; font-size:${h1s.fontSize || '14pt'}; font-weight:${h1s.fontWeight || 'bold'}; font-style:${h1s.fontStyle || 'normal'}; font-family:${cleanFontFamily};">${titleHtml}</h1>`;
       }
 
-      const renderContentText = (rawText) => {
+      const renderContentText = (rawText, textAlign = 'justify', section = {}) => {
         let out = '';
+        const { leftIndent, rightIndent, textIndent } = getSectionParagraphIndent(section);
+        const paragraphMargin = `margin-left:${leftIndent}cm; margin-right:${rightIndent}cm;`;
         const paragraphs = rawText.split(/\n+/).filter(p => p.trim());
-        paragraphs.forEach(p => {
+        paragraphs.forEach((p, paragraphIndex) => {
           const text = p.trim();
+          const paragraphAlign = getParagraphAlignment(section, paragraphIndex, textAlign);
           if (text === '---') {
             out += '<br clear="all" style="page-break-before: always;" />';
             return;
@@ -2907,10 +3230,9 @@ export default function Index() {
             if (cleanedPart) {
               const listMatch = cleanedPart.match(/^([0-9a-zA-Z]+[\.\)])\s+(.*)$/);
               if (listMatch) {
-                out += `<p style="margin:0; margin-left:1cm; text-indent:-1cm; mso-tab-stops:1.0cm; text-align:justify; line-height:${wordLineHeight}; font-family:${cleanFontFamily}; font-size:${baseFontSize};"><span style="font-weight:bold;">${listMatch[1]}</span><span style="mso-tab-count:1">&#9;</span>${italicizeEnglishWordsText(listMatch[2].trimStart())}</p>`;
+                out += `<p style="margin:0; margin-left:${leftIndent + 1}cm; margin-right:${rightIndent}cm; text-indent:-1cm; mso-tab-stops:1.0cm; text-align:${paragraphAlign}; line-height:${wordLineHeight}; font-family:${cleanFontFamily}; font-size:${baseFontSize};"><span style="font-weight:bold;">${listMatch[1]}</span><span style="mso-tab-count:1">&#9;</span>${italicizeEnglishWordsText(listMatch[2].trimStart())}</p>`;
               } else {
-                const indent = layout.paragraphIndent === 'indented' ? '1.25cm' : '0cm';
-                out += `<p class="paragraph-content" style="text-indent:${indent}; text-align:justify; margin:0; line-height:${wordLineHeight}; font-family:${cleanFontFamily}; font-size:${baseFontSize};">${italicizeEnglishWordsText(cleanedPart)}</p>`;
+                out += `<p class="paragraph-content" style="${paragraphMargin} text-indent:${textIndent}cm; text-align:${paragraphAlign}; margin-top:0; margin-bottom:0; line-height:${wordLineHeight}; font-family:${cleanFontFamily}; font-size:${baseFontSize};">${italicizeEnglishWordsText(cleanedPart)}</p>`;
               }
             }
             if (index < parts.length - 1) {
@@ -2938,7 +3260,7 @@ export default function Index() {
             html += `<h${lvl} class="MsoHeading${lvl}" style="mso-outline-level:${lvl}; text-align:${hs.textAlign || 'left'}; font-size:${hs.fontSize || '12pt'}; font-weight:${hs.fontWeight || 'bold'}; font-style:${hs.fontStyle || 'normal'}; font-family:${cleanFontFamily};">${titleHtml}</h${lvl}>`;
           }
           if (sec.content && sec.content.trim()) {
-            html += renderContentText(sec.content);
+            html += renderContentText(sec.content, sec.textAlign || layout.textAlign || 'justify', sec);
           }
         }
       });
@@ -3041,9 +3363,12 @@ export default function Index() {
           if (bulletSpan && textSpan) {
             const p = document.createElement('p');
             p.style.margin = '0';
-            p.style.marginLeft = '1cm';
+            const listMarginLeft = flexEl.style.marginLeft || '0cm';
+            const listMarginRight = flexEl.style.marginRight || '0cm';
+            p.style.marginLeft = `calc(${listMarginLeft} + 1cm)`;
+            p.style.marginRight = listMarginRight;
             p.style.textIndent = '-1cm';
-            p.style.textAlign = 'justify';
+            p.style.textAlign = flexEl.style.textAlign || textSpan.style.textAlign || 'justify';
             p.setAttribute('style', (p.getAttribute('style') || '') + '; mso-tab-stops:1.0cm;');
             
             p.innerHTML = `<span style="font-weight:bold;">${bulletSpan.innerHTML.trim()}</span><span style="mso-tab-count:1">&#9;</span>${textSpan.innerHTML.trim()}`;
@@ -3282,10 +3607,12 @@ export default function Index() {
 
           // Apply paragraph indentation to normal paragraph contents
           if (el.classList.contains('paragraph-content')) {
-            if (layout.paragraphIndent === 'indented') {
-              style += 'text-indent: 1.25cm; ';
-            } else {
-              style += 'text-indent: 0cm; ';
+            if (!el.style.textIndent) {
+              if (layout.paragraphIndent === 'indented') {
+                style += 'text-indent: 1.25cm; ';
+              } else {
+                style += 'text-indent: 0cm; ';
+              }
             }
             style += 'margin-bottom: 0pt; ';
             style += `line-height: ${wordLineHeight}; `;
@@ -3433,27 +3760,27 @@ export default function Index() {
             mso-outline-level: 3;
           }
           h4 {
-            font-size: ${headingStyles?.h3?.fontSize || '12pt'};
-            font-weight: ${headingStyles?.h3?.fontWeight || 'bold'};
-            text-align: ${headingStyles?.h3?.textAlign || 'left'};
+            font-size: ${headingStyles?.h4?.fontSize || '11pt'};
+            font-weight: ${headingStyles?.h4?.fontWeight || 'bold'};
+            text-align: ${headingStyles?.h4?.textAlign || 'left'};
             font-family: ${cleanFontFamily};
             margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
             mso-style-name: "heading 4";
             mso-outline-level: 4;
           }
           h5 {
-            font-size: ${headingStyles?.h3?.fontSize || '12pt'};
-            font-weight: ${headingStyles?.h3?.fontWeight || 'bold'};
-            text-align: ${headingStyles?.h3?.textAlign || 'left'};
+            font-size: ${headingStyles?.h5?.fontSize || '11pt'};
+            font-weight: ${headingStyles?.h5?.fontWeight || 'normal'};
+            text-align: ${headingStyles?.h5?.textAlign || 'left'};
             font-family: ${cleanFontFamily};
             margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
             mso-style-name: "heading 5";
             mso-outline-level: 5;
           }
           h6 {
-            font-size: ${headingStyles?.h3?.fontSize || '12pt'};
-            font-weight: ${headingStyles?.h3?.fontWeight || 'bold'};
-            text-align: ${headingStyles?.h3?.textAlign || 'left'};
+            font-size: ${headingStyles?.h6?.fontSize || '10pt'};
+            font-weight: ${headingStyles?.h6?.fontWeight || 'normal'};
+            text-align: ${headingStyles?.h6?.textAlign || 'left'};
             font-family: ${cleanFontFamily};
             margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
             mso-style-name: "heading 6";
@@ -4223,1040 +4550,47 @@ export default function Index() {
   // DOCX IMPORT LOGIC
   // ==========================================================================
 
-  const restoreDraftSnapshot = async (snapshot, filename, isCreateNew) => {
-    if (!snapshot || !snapshot.__skripsi) return false;
-
-    if (snapshot.layout) setLayout(snapshot.layout);
-    if (snapshot.cover) setCover(snapshot.cover);
-    if (snapshot.coverElements) setCoverElements(snapshot.coverElements);
-    if (snapshot.babSections) setBabSections(snapshot.babSections);
-    if (snapshot.babTitles) setBabTitles(snapshot.babTitles);
-    if (Array.isArray(snapshot.references)) setReferences(snapshot.references);
-    if (snapshot.refStyle) setRefStyle(snapshot.refStyle);
-    if (typeof snapshot.abstrakIndo === 'string') setAbstrakIndo(snapshot.abstrakIndo);
-    if (typeof snapshot.abstrakIndoKeywords === 'string') setAbstrakIndoKeywords(snapshot.abstrakIndoKeywords);
-    if (typeof snapshot.abstrakEng === 'string') setAbstrakEng(snapshot.abstrakEng);
-    if (typeof snapshot.abstrakEngKeywords === 'string') setAbstrakEngKeywords(snapshot.abstrakEngKeywords);
-    if (snapshot.headingStyles) setHeadingStyles(snapshot.headingStyles);
-
-    const restoredState = {
-      layout: snapshot.layout || layout,
-      cover: snapshot.cover || cover,
-      coverElements: snapshot.coverElements || coverElements,
-      babSections: snapshot.babSections || babSections,
-      babTitles: snapshot.babTitles || babTitles,
-      references: Array.isArray(snapshot.references) ? snapshot.references : [],
-      refStyle: snapshot.refStyle || refStyle,
-      tables: getAllTables(snapshot.babSections || babSections),
-      figures: getAllFigures(snapshot.babSections || babSections),
-      abstrakIndo: snapshot.abstrakIndo || '',
-      abstrakIndoKeywords: snapshot.abstrakIndoKeywords || '',
-      abstrakEng: snapshot.abstrakEng || '',
-      abstrakEngKeywords: snapshot.abstrakEngKeywords || '',
-      headingStyles: snapshot.headingStyles || headingStyles
-    };
-
-    saveLocalDraft(restoredState);
-    setHasLocalDraft(true);
-    setShowWelcomeModal(false);
-    setShowDraftManager(false);
-
-    if (isCreateNew) {
-      try {
-        await saveDraftRequest(filename, restoredState);
-        setSaveFilename(filename);
-        autosaveConfirmedRef.current = filename;
-        fetchDraftsList();
-      } catch (dbErr) {
-        console.warn('Snapshot imported locally, but DB draft save failed:', dbErr);
-      }
-    } else {
-      setSaveFilename('Draft_Skripsi');
-      autosaveConfirmedRef.current = null;
-    }
-
-    lastSavedPayloadRef.current = '';
-    return true;
-  };
-
-  const handleDocxImport = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    let isCreateNew = false;
-    let newFilename = file.name.replace(/\.[^/.]+$/, "");
-
-    const wantNewDraft = confirm(
-      'Apakah Anda ingin menyimpan hasil impor ini sebagai DRAFT BARU?\n\n' +
-      'Klik OK untuk membuat DRAFT BARU.\n' +
-      'Klik Batal (Cancel) untuk MENIMPA draft aktif saat ini.'
-    );
-
-    if (wantNewDraft) {
-      const customName = prompt("Masukkan nama draft baru:", newFilename);
-      if (customName === null) {
-        e.target.value = ''; // User cancelled
-        return;
-      }
-      newFilename = customName.trim() || newFilename;
-      isCreateNew = true;
-    } else {
-      if (!confirm('Peringatan: Pilihan ini akan menimpa seluruh konten BAB yang ada saat ini. Lanjutkan?')) {
-        e.target.value = ''; // Reset input
-        return;
-      }
-    }
-
-    showToast('Sedang memproses dokumen Word...');
-    
-    try {
-      const newBabTitles = { ...babTitles };
-
-      const isChapterTitle = (text) => {
-        const clean = text.replace(/^\s*(?:\par|\(?\d+(?:\.\d+)*[.)]?|[A-Za-z][.)]|\([A-Za-z0-9]+\))\s*/, '').trim();
-        const cleanLower = clean.toLowerCase();
-        
-        // If it starts with list numbering (like 1., a., etc.), it's a list item, not a chapter!
-        if (/^\s*(?:\par|\(?\d+(?:\.\d+)*[.)]|[A-Za-z][.)]|\([A-Za-z0-9]+\))\s/i.test(text)) return false;
-
-        // If the title contains "BAB" followed by roman/arabic numbers, it's definitely a chapter title
-        if (/\bBAB\s*(I{1,3}|IV|V|VI|\d+)\b/i.test(text)) return true;
-        
-        // If it starts with a double-level numbering prefix (e.g., 1.1, 1.2, 2.1) and does NOT contain "BAB", it is a sub-chapter, not a chapter!
-        const hasDoubleLevelPrefix = /^\s*\d+\.\d+/.test(text);
-        if (hasDoubleLevelPrefix) return false;
-        
-        // Or if it matches a standard Indonesian chapter title exactly
-        const standardChapters = [
-          'pendahuluan',
-          'tinjauan pustaka',
-          'landasan teori',
-          'metode penelitian',
-          'metodologi penelitian',
-          'hasil penelitian',
-          'hasil dan pembahasan',
-          'kesimpulan dan saran',
-          'penutup',
-          'analisis dan perancangan',
-          'analisis sistem',
-          'perancangan sistem',
-          'tinjauan teoritis',
-          'landasan teoritis',
-          'gambaran umum',
-          'gambaran umum perusahaan',
-          'deskripsi sistem',
-          'implementasi',
-          'implementasi sistem',
-          'pengujian',
-          'pengujian sistem',
-          'kesimpulan',
-          'saran'
-        ];
-        return standardChapters.includes(cleanLower);
-      };
-
-      const arrayBuffer = await file.arrayBuffer();
-
-      // Detect file format: real .docx is a ZIP archive (starts with "PK" = 0x50 0x4B),
-      // while our exported .doc is an HTML-based Word file (plain text/HTML).
-      const headerBytes = new Uint8Array(arrayBuffer.slice(0, 4));
-      const isZipDocx = headerBytes[0] === 0x50 && headerBytes[1] === 0x4B; // "PK"
-
-      let html;
-      let docLayoutSettings = {};
-      let docHeadingStyles = {};
-      if (isZipDocx) {
-        const snapshot = await extractDocxSnapshot(arrayBuffer);
-        if (snapshot) {
-          const restored = await restoreDraftSnapshot(snapshot, newFilename, isCreateNew);
-          if (restored) {
-            showToast('Impor berhasil - seluruh format & isi draft dipulihkan dari snapshot DOCX!');
-            e.target.value = '';
-            return;
-          }
-        }
-
-        const extractedDocxLayout = await extractDocxLayout(arrayBuffer);
-        docLayoutSettings = extractedDocxLayout.layout || {};
-        docHeadingStyles = extractedDocxLayout.headingStyles || {};
-
-        // Real .docx (OOXML) — parse with mammoth.
-        // Loaded on demand so the ~1MB mammoth library stays out of the main bundle.
-        const { default: mammoth } = await import('mammoth');
-        const result = await mammoth.convertToHtml(
-          { arrayBuffer },
-          {
-            styleMap: DOCX_MAMMOTH_STYLE_MAP,
-            includeDefaultStyleMap: true,
-            ignoreEmptyParagraphs: false,
-          }
-        );
-        html = result.value;
-      } else {
-        // HTML-based .doc (our own export) — decode the text and use its HTML directly
-        const decoder = new TextDecoder('utf-8');
-        let rawHtml = decoder.decode(arrayBuffer);
-        // Strip BOM if present
-        rawHtml = rawHtml.replace(/^\ufeff/, '');
-
-        // FAST PATH: our exports embed a full draft snapshot. If present, restore the
-        // entire draft (title, logo, images, page breaks, layout) with perfect fidelity.
-        const snapshot = extractDraftSnapshotFromHtml(rawHtml);
-        if (snapshot) {
-          const restored = await restoreDraftSnapshot(snapshot, newFilename, isCreateNew);
-          if (restored) {
-            showToast('Impor berhasil - seluruh format & isi draft dipulihkan dari snapshot!');
-            e.target.value = '';
-            return;
-          }
-        }
-
-        const snapMatch = rawHtml.match(/<!--SKRIPSI_DRAFT_V2:([A-Za-z0-9+/=]+)-->/);
-        if (snapMatch) {
-          try {
-            const json = decodeURIComponent(escape(atob(snapMatch[1])));
-            const snap = JSON.parse(json);
-            if (snap && snap.__skripsi) {
-              if (snap.layout) setLayout(snap.layout);
-              if (snap.cover) setCover(snap.cover);
-              if (snap.coverElements) setCoverElements(snap.coverElements);
-              if (snap.babSections) setBabSections(snap.babSections);
-              if (snap.babTitles) setBabTitles(snap.babTitles);
-              if (Array.isArray(snap.references)) setReferences(snap.references);
-              if (snap.refStyle) setRefStyle(snap.refStyle);
-              if (typeof snap.abstrakIndo === 'string') setAbstrakIndo(snap.abstrakIndo);
-              if (typeof snap.abstrakIndoKeywords === 'string') setAbstrakIndoKeywords(snap.abstrakIndoKeywords);
-              if (typeof snap.abstrakEng === 'string') setAbstrakEng(snap.abstrakEng);
-              if (typeof snap.abstrakEngKeywords === 'string') setAbstrakEngKeywords(snap.abstrakEngKeywords);
-              if (snap.headingStyles) setHeadingStyles(snap.headingStyles);
-
-              const restoredState = {
-                layout: snap.layout || layout,
-                cover: snap.cover || cover,
-                coverElements: snap.coverElements || coverElements,
-                babSections: snap.babSections || babSections,
-                babTitles: snap.babTitles || babTitles,
-                references: Array.isArray(snap.references) ? snap.references : [],
-                refStyle: snap.refStyle || refStyle,
-                tables: getAllTables(snap.babSections || babSections),
-                figures: getAllFigures(snap.babSections || babSections),
-                abstrakIndo: snap.abstrakIndo || '',
-                abstrakIndoKeywords: snap.abstrakIndoKeywords || '',
-                abstrakEng: snap.abstrakEng || '',
-                abstrakEngKeywords: snap.abstrakEngKeywords || '',
-                headingStyles: snap.headingStyles || headingStyles
-              };
-              saveLocalDraft(restoredState);
-              setHasLocalDraft(true);
-              setShowWelcomeModal(false);
-              setShowDraftManager(false);
-
-              if (isCreateNew) {
-                try {
-                  await saveDraftRequest(newFilename, restoredState);
-                  setSaveFilename(newFilename);
-                  autosaveConfirmedRef.current = newFilename;
-                  fetchDraftsList();
-                } catch (dbErr) { /* ignore, local save already done */ }
-              } else {
-                setSaveFilename('Draft_Skripsi');
-                autosaveConfirmedRef.current = null;
-              }
-              lastSavedPayloadRef.current = '';
-              showToast('Impor berhasil — seluruh format & isi draft dipulihkan dari snapshot!');
-              e.target.value = '';
-              return;
-            }
-          } catch (err) {
-            console.warn('Snapshot restore failed, falling back to HTML parsing:', err);
-          }
-        }
-
-        // Try to parse layout/formatting settings embedded in the style sheet of our HTML-based .doc export
-        try {
-          // Parse Margins
-          const marginMatch = rawHtml.match(/@page\s*WordSection[12]\s*\{\s*[^}]*margin:\s*([\d\.]+)cm\s+([\d\.]+)cm\s+([\d\.]+)cm\s+([\d\.]+)cm/i)
-                           || rawHtml.match(/@page\s*\{\s*[^}]*margin:\s*([\d\.]+)cm\s+([\d\.]+)cm\s+([\d\.]+)cm\s+([\d\.]+)cm/i);
-          if (marginMatch) {
-            docLayoutSettings.marginTop = parseFloat(marginMatch[1]);
-            docLayoutSettings.marginRight = parseFloat(marginMatch[2]);
-            docLayoutSettings.marginBottom = parseFloat(marginMatch[3]);
-            docLayoutSettings.marginLeft = parseFloat(marginMatch[4]);
-            
-            // Deduce preset
-            if (docLayoutSettings.marginTop === 4.0 && docLayoutSettings.marginLeft === 4.0 && docLayoutSettings.marginBottom === 3.0 && docLayoutSettings.marginRight === 3.0) {
-              docLayoutSettings.preset = 'dikti';
-            } else if (docLayoutSettings.marginTop === 3.0 && docLayoutSettings.marginLeft === 3.0 && docLayoutSettings.marginBottom === 3.0 && docLayoutSettings.marginRight === 3.0) {
-              docLayoutSettings.preset = 'ringkas';
-            } else {
-              docLayoutSettings.preset = 'custom';
-            }
-          }
-
-          // Parse Font Family
-          const fontMatch = rawHtml.match(/body\s*\{\s*[^}]*font-family:\s*([^;'}]+)/i)
-                         || rawHtml.match(/font-family:\s*([^;'}]+)/i);
-          if (fontMatch) {
-            const fontName = fontMatch[1].replace(/['"]/g, '').trim();
-            if (fontName.toLowerCase().includes('times new roman') || fontName.toLowerCase().includes('times')) {
-              docLayoutSettings.fontFamily = "'Times New Roman', Times, serif";
-            } else if (fontName.toLowerCase().includes('arial')) {
-              docLayoutSettings.fontFamily = "Arial, Helvetica, sans-serif";
-            } else if (fontName.toLowerCase().includes('georgia')) {
-              docLayoutSettings.fontFamily = "Georgia, serif";
-            }
-          }
-
-          // Parse Paragraph Indent style
-          const indentMatch = rawHtml.match(/p\.paragraph-content\s*\{\s*[^}]*text-indent:\s*([^;'}]+)/i)
-                           || rawHtml.match(/text-indent:\s*([^;'}]+)/i);
-          if (indentMatch) {
-            const indentVal = indentMatch[1].trim();
-            if (indentVal === '0cm' || indentVal === '0') {
-              docLayoutSettings.paragraphIndent = 'flush';
-            } else {
-              docLayoutSettings.paragraphIndent = 'indented';
-            }
-          }
-
-          // Parse Line Spacing / Line height
-          const lineSpacingMatch = rawHtml.match(/p\.paragraph-content\s*\{\s*[^}]*line-height:\s*([^;'}]+)/i)
-                                || rawHtml.match(/line-height:\s*([^;'}%]+%)/i);
-          if (lineSpacingMatch) {
-            const lhVal = lineSpacingMatch[1].trim();
-            if (lhVal.endsWith('%')) {
-              const percent = parseFloat(lhVal);
-              docLayoutSettings.lineSpacing = (percent / 100).toFixed(1);
-            } else if (!isNaN(lhVal)) {
-              docLayoutSettings.lineSpacing = parseFloat(lhVal).toFixed(1);
-            }
-          }
-
-          // Parse show/hide config states based on presence of key pages in document
-          docLayoutSettings.showPersetujuan = rawHtml.includes('id="persetujuan"') || rawHtml.includes('id=\'persetujuan\'');
-          docLayoutSettings.showPengesahan = rawHtml.includes('id="pengesahan"') || rawHtml.includes('id=\'pengesahan\'');
-          docLayoutSettings.showPernyataan = rawHtml.includes('id="pernyataan"') || rawHtml.includes('id=\'pernyataan\'');
-          docLayoutSettings.showAbstractIndo = rawHtml.includes('id="abstrak-indo"') || rawHtml.includes('id=\'abstrak-indo\'');
-          docLayoutSettings.showAbstractEng = rawHtml.includes('id="abstrak-eng"') || rawHtml.includes('id=\'abstrak-eng\'');
-        } catch (e) {
-          console.warn('Failed to parse styling from exported document: ', e);
-        }
-
-        const bodyMatch = rawHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-        html = bodyMatch ? bodyMatch[1] : rawHtml;
-      }
-
-      // Create a temporary div to parse the HTML
-      const tempDiv = document.createElement('div');
-      tempDiv.innerHTML = html;
-
-      // Replace all <br> / <br/> tags inside tempDiv with a space so textContent parses word boundaries correctly
-      tempDiv.querySelectorAll('br').forEach(br => {
-        br.parentNode.replaceChild(document.createTextNode(' '), br);
-      });
-
-      // If this is our own HTML-based export, the content is wrapped in
-      // WordSection/word-page divs with header/footer definitions. Flatten these
-      // so the import scanner sees headings/paragraphs as top-level elements.
-      if (!isZipDocx) {
-        // Remove Word header/footer field definitions
-        tempDiv.querySelectorAll('div[style*="mso-element:header"], div[style*="mso-element:footer"]').forEach(el => el.remove());
-        
-        // Unwrap structural wrapper divs repeatedly until none remain.
-        // We unwrap a div if:
-        // 1. It contains nested divs (which means it is a structural wrapper)
-        // 2. It contains heading elements (h1-h6) which need to be at the top level
-        // 3. It doesn't contain a table, image, or diagram (meaning it is not a block-level container like table/figure)
-        let didUnwrap = true;
-        let guard = 0;
-        while (didUnwrap && guard < 50) {
-          didUnwrap = false;
-          guard++;
-          
-          const divs = Array.from(tempDiv.querySelectorAll('div'));
-          for (let div of divs) {
-            const hasHeading = div.querySelector('h1, h2, h3, h4, h5, h6') !== null;
-            const hasNestedDiv = div.querySelector('div') !== null;
-            const hasTable = div.querySelector('table') !== null;
-            const hasImg = div.querySelector('img') !== null;
-            const hasDiagramText = /\[Skema|Diagram/i.test(div.textContent || '');
-            
-            if (hasHeading || hasNestedDiv || (!hasTable && !hasImg && !hasDiagramText)) {
-              while (div.firstChild) {
-                div.parentNode.insertBefore(div.firstChild, div);
-              }
-              div.remove();
-              didUnwrap = true;
-              break; // Break inner loop to re-query
-            }
-          }
-        }
-      }
-
-      // Pre-scan elements to see if there are explicit "BAB I", "BAB II", etc.
-      let hasExplicitChapters = false;
-      Array.from(tempDiv.childNodes).forEach(node => {
-        if (node.nodeType !== Node.ELEMENT_NODE) return;
-        const textContent = node.textContent.trim();
-        const babMatch = textContent.match(/^BAB\s*(I{1,3}|IV|V|VI|1|2|3|4|5|6)\b/i);
-        if (babMatch && textContent.length < 100) {
-          hasExplicitChapters = true;
-        }
-      });
-
-      const newBabSections = {
-        bab1: [],
-        bab2: [],
-        bab3: [],
-        bab4: [],
-        bab5: []
-      };
-
-      let currentBabIndex = 0; // 0 = bab1, 1 = bab2... up to 4
-      const babKeys = ['bab1', 'bab2', 'bab3', 'bab4', 'bab5'];
-      
-      let currentSectionId = null;
-      let currentContent = [];
-
-      const flushSection = () => {
-        if (currentSectionId && currentContent.length > 0) {
-          const bKey = babKeys[currentBabIndex];
-          if (bKey) {
-            const sec = newBabSections[bKey].find(s => s.id === currentSectionId);
-            if (sec) {
-              sec.content = currentContent.join('\n\n');
-            }
-          }
-        }
-        currentContent = [];
-      };
-
-      // Parse an HTML <table> element into headers string + rows array
-      const parseImportedTable = (tableEl) => {
-        const trs = Array.from(tableEl.querySelectorAll('tr'));
-        if (trs.length === 0) return { headers: '', rows: [] };
-        const cellText = (tr) => Array.from(tr.children)
-          .filter(c => /^(td|th)$/i.test(c.tagName))
-          .map(c => c.textContent.trim());
-        const headers = cellText(trs[0]).join(', ');
-        const rows = trs.slice(1).map(tr => cellText(tr));
-        return { headers, rows };
-      };
-
-      // Start a fresh continuation paragraph section (used after a table/figure/equation block)
-      const startContinuationSection = (bKey) => {
-        currentSectionId = 'import_' + Date.now() + Math.random();
-        newBabSections[bKey].push({
-          id: currentSectionId,
-          type: 'text',
-          title: '',
-          content: '',
-          headingLevel: 0,
-          numberingStyle: 'none'
-        });
-      };
-
-      // Pick the most likely caption inside a content wrapper element.
-      // Considers <p>, <div>, and <span> leaf text nodes; skips placeholder text
-      // ("[Skema ...]") and the "Keterangan" legend.
-      const pickCaption = (wrapperEl) => {
-        const candidates = Array.from(wrapperEl.querySelectorAll('p, div, span'));
-        for (let i = candidates.length - 1; i >= 0; i--) {
-          const elx = candidates[i];
-          // Only consider leaf-ish elements (no nested block children with their own text)
-          if (elx.querySelector('p, div, table, img')) continue;
-          const t = elx.textContent.trim();
-          if (t && !t.startsWith('[') && !/^keterangan/i.test(t)) return t;
-        }
-        return '';
-      };
-
-      // Initialize currentSectionId as null (we will dynamically create it when text/lists are found)
-      currentSectionId = null;
-
-      const frontMatterTexts = [];
-      let isSkipMode = false;
-      let hasHitFirstBab = false;
-      let hasHitExplicitBab = false;
-      let pendingBlock = null; // { section, kind } of a just-created figure/table to capture a trailing caption
-
-      Array.from(tempDiv.childNodes).forEach(node => {
-        if (node.nodeType !== Node.ELEMENT_NODE) return;
-        
-        const tagName = node.tagName.toLowerCase();
-        const textContent = node.textContent.trim();
-        const hasImg = !!(node.querySelector && node.querySelector('img'));
-        
-        if (!textContent && tagName !== 'img' && !hasImg) return;
-
-        // If a figure/table was just created, a following short caption-like paragraph
-        // (e.g. "Gambar MySQL", "Tabel 2.1 ...") belongs to that block — capture & swallow it
-        // so it doesn't become a stray paragraph.
-        if (pendingBlock) {
-          const pb = pendingBlock;
-          pendingBlock = null;
-          const norm = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase();
-          if ((tagName === 'p' || tagName === 'div') && !hasImg && !(node.querySelector && node.querySelector('table'))) {
-            const labelRe = pb.kind === 'figure' ? /^gambar\b/i : /^tabel\b/i;
-            const isLoneLabel = /^(gambar|tabel|figure|table)(\s+\d+([.\-]\d+)*)?\.?$/i.test(textContent);
-            const isDup = pb.section.title && norm(textContent) === norm(pb.section.title);
-            const hasDefaultTitle = !pb.section.title || pb.section.title === 'Gambar' || pb.section.title === 'Tabel';
-            const isCaptionLike = textContent.length <= 120 && labelRe.test(textContent);
-
-            if (isDup || isLoneLabel) {
-              return; // always swallow exact duplicate or a lone "Gambar"/"Tabel" label
-            }
-            if (isCaptionLike && hasDefaultTitle) {
-              pb.section.title = textContent; // adopt the trailing caption as this block's title
-              return; // swallow
-            }
-            // otherwise fall through and treat as normal content
-          }
-        }
-
-        // Skip Table of Contents entries entirely (contain dot leaders or page numbers at the end)
-        // Check this immediately at the start to prevent triggering false chapter starts on TOC entries
-        const isLikelyTocEntry = 
-          (node.classList && node.classList.contains('toc-item')) ||
-          /\t\s*(?:[0-9]{1,3}|[ivxldcm]+)\s*$/i.test(textContent) ||
-          /[\.\s_]{2,}(?:[0-9]{1,3}|[ivxldcm]+)\s*$/i.test(textContent) ||
-          (!hasHitFirstBab && /\s+(?:[0-9]{1,3}|[ivxldcm]+)\s*$/i.test(textContent)) ||
-          /\.{4,}/.test(textContent);
-        
-        // Smart TOC block detection
-        const lowerText = textContent.toLowerCase();
-        const containsDaftarIsi = lowerText.includes('daftar isi') || lowerText.includes('daftar tabel') || lowerText.includes('daftar gambar') || lowerText.includes('daftar rumus');
-        const containsBabI = /\bbab\s*(i|1)\b/i.test(lowerText);
-        const containsBabII = /\bbab\s*(ii|2)\b/i.test(lowerText);
-        const containsBabIII = /\bbab\s*(iii|3)\b/i.test(lowerText);
-        const matchesMultipleBab = [containsBabI, containsBabII, containsBabIII].filter(Boolean).length >= 2;
-        const isTocBlock = (containsDaftarIsi && (containsBabI || containsBabII || containsBabIII)) || matchesMultipleBab || (textContent.length > 500 && containsDaftarIsi);
-
-        if (isLikelyTocEntry || isTocBlock) {
-          if (isTocBlock && !hasHitFirstBab) {
-            isSkipMode = true;
-          }
-          return;
-        }
-
-        const isFrontMatterHeading = (tagName === 'h1' || tagName === 'h2' || tagName === 'p') && 
-                                     textContent.length < 100 &&
-                                     /^(kata pengantar|ucapan terima kasih|daftar isi|daftar tabel|daftar gambar|daftar rumus|daftar lampiran|daftar simbol|daftar lambang|daftar singkatan|daftar istilah|abstrak|abstract|halaman pengesahan|halaman persetujuan|lembar pengesahan|lembar persetujuan|pernyataan|motto|persembahan)/i.test(textContent);
-
-        // Smart BAB Detection: looks for "BAB I", "BAB 1", etc.
-        const babMatch = textContent.match(/^BAB\s*(I{1,3}|IV|V|VI|1|2|3|4|5|6)\b/i);
-        let explicitBabIndex = -1;
-
-        if (babMatch && textContent.length < 100) {
-          const numStr = babMatch[1].toUpperCase();
-          if (numStr === 'I' || numStr === '1') explicitBabIndex = 0;
-          else if (numStr === 'II' || numStr === '2') explicitBabIndex = 1;
-          else if (numStr === 'III' || numStr === '3') explicitBabIndex = 2;
-          else if (numStr === 'IV' || numStr === '4') explicitBabIndex = 3;
-          else if (numStr === 'V' || numStr === '5') explicitBabIndex = 4;
-        }
-
-        const isChapter = isChapterTitle(textContent) || explicitBabIndex !== -1;
-
-        // Set hasHitFirstBab if it's an explicit bab or a chapter title
-        if (isChapter) {
-          hasHitFirstBab = true;
-        }
-
-        // Collect front matter text for cover parsing (excluding front matter section headers, TOC lines, tables, and lists)
-        const isStructuralOrComplex = tagName === 'table' || tagName === 'ul' || tagName === 'ol' || 
-                                      (node.querySelector && node.querySelector('table, ul, ol')) ||
-                                      isTocBlock;
-        if (!hasHitFirstBab && !isSkipMode && tagName !== 'script' && tagName !== 'style' && !isStructuralOrComplex) {
-          const lines = textContent.split('\n').map(l => l.trim()).filter(l => l.length > 2);
-          lines.forEach(line => {
-            const lineLower = line.toLowerCase();
-            const isLineHeader = line.length < 100 && /^(kata pengantar|ucapan terima kasih|daftar isi|daftar tabel|daftar gambar|daftar rumus|daftar lampiran|daftar simbol|daftar lambang|daftar singkatan|daftar istilah|abstrak|abstract|halaman pengesahan|halaman persetujuan|lembar pengesahan|lembar persetujuan|pernyataan|motto|persembahan)/i.test(line);
-            const isLineToc = isLikelyTocEntry || /[\.\s_]{3,}\d+$/m.test(line);
-            const isLineChapter = isChapterTitle(line);
-            const isLineSubChapter = /^\s*\d+\.\d+/.test(line);
-            if (!isLineHeader && !isLineToc && !isLineChapter && !isLineSubChapter) {
-              frontMatterTexts.push({ text: line, tag: tagName });
-            }
-          });
-        }
-
-        if (isFrontMatterHeading) {
-           isSkipMode = true;
-           return;
-        }
-
-        if (isChapter) {
-          isSkipMode = false;
-          flushSection();
-          
-          const cleanTitle = textContent.replace(/^\s*(?:\par|\(?\d+(?:\.\d+)*[.)]?|[A-Za-z][.)]|\([A-Za-z0-9]+\))\s*/, '').trim();
-          const babMatchInner = cleanTitle.match(/^BAB\s*(I{1,3}|IV|V|VI|1|2|3|4|5|6)\b/i);
-          let explicitIndex = -1;
-          if (babMatchInner) {
-            const numStr = babMatchInner[1].toUpperCase();
-            if (numStr === 'I' || numStr === '1') explicitIndex = 0;
-            else if (numStr === 'II' || numStr === '2') explicitIndex = 1;
-            else if (numStr === 'III' || numStr === '3') explicitIndex = 2;
-            else if (numStr === 'IV' || numStr === '4') explicitIndex = 3;
-            else if (numStr === 'V' || numStr === '5') explicitIndex = 4;
-          }
-
-          if (explicitIndex !== -1) {
-            currentBabIndex = explicitIndex;
-            hasHitExplicitBab = true;
-          } else if (explicitBabIndex !== -1) {
-            currentBabIndex = explicitBabIndex;
-            hasHitExplicitBab = true;
-          } else if (!hasExplicitChapters && currentBabIndex < 4 && newBabSections[babKeys[currentBabIndex]].length > 0 && 
-              (newBabSections[babKeys[currentBabIndex]][0].content !== '' || newBabSections[babKeys[currentBabIndex]].length > 1)) {
-            currentBabIndex++;
-          }
-
-          const bKey = babKeys[currentBabIndex];
-          let parsedPrefix = babTitles[bKey]?.prefix || `BAB ${currentBabIndex + 1}`;
-          let parsedTitle = cleanTitle;
-          if (babMatchInner) {
-            parsedPrefix = babMatchInner[0].toUpperCase();
-            parsedTitle = cleanTitle.substring(babMatchInner[0].length).trim();
-          }
-          if (!parsedTitle) {
-            parsedTitle = babTitles[bKey]?.title || '';
-          }
-
-          newBabTitles[bKey] = {
-            prefix: parsedPrefix.toUpperCase(),
-            title: parsedTitle.toUpperCase()
-          };
-
-          // Reset currentSectionId to null so any following text starts a new block
-          currentSectionId = null;
-        } 
-        else if (tagName === 'h1') {
-          // Treat this H1 as a Sub-Bab (level 2) instead of a Bab (level 0)
-          if (!hasHitFirstBab) return; // If we haven't hit the first Bab yet, ignore it!
-          isSkipMode = false;
-          flushSection();
-
-          let cleanTitle = textContent.replace(/^\s*(?:\par|\(?\d+(?:\.\d+)*[.)]?|[A-Za-z][.)]|\([A-Za-z0-9]+\))\s*/, '').trim();
-          if (!cleanTitle) cleanTitle = textContent;
-
-          currentSectionId = 'import_' + Date.now() + Math.random();
-          newBabSections[babKeys[currentBabIndex]].push({
-            id: currentSectionId,
-            type: 'text',
-            title: cleanTitle,
-            content: '',
-            headingLevel: 2,
-            numberingStyle: 'bab_prefix_dot'
-          });
-        } 
-        else if (tagName === 'h2' || tagName === 'h3') {
-          // Treat this H2/H3 as a Sub-chapter/Sub-sub-chapter
-          if (!hasHitFirstBab) return; // If we haven't hit the first Bab yet, ignore it!
-          isSkipMode = false;
-          flushSection();
-
-          // Strip leading numbering from H2/H3
-          let cleanTitle = textContent.replace(/^\s*(?:\par|\(?\d+(?:\.\d+)*[.)]?|[A-Za-z][.)]|\([A-Za-z0-9]+\))\s*/, '').trim();
-          if (!cleanTitle) cleanTitle = textContent;
-
-          currentSectionId = 'import_' + Date.now() + Math.random();
-          
-          // Classify level and numbering style based on Indonesian thesis structure
-          const isH2 = tagName === 'h2';
-          const titleLower = cleanTitle.toLowerCase();
-          const isMainSub = /^(latar belakang|identifikasi masalah|batasan masalah|rumusan masalah|tujuan|manfaat|keaslian|sistematika|penelitian terdahulu|kajian pustaka|landasan teori|tinjauan pustaka|kerangka|hipotesis|desain|pendekatan|variabel|populasi|sampel|instrumen|pengumpulan data|analisis data|deskripsi data|pembahasan|kesimpulan|saran)/i.test(titleLower);
-          
-          const level = (isH2 || isMainSub) ? 2 : 3;
-          newBabSections[babKeys[currentBabIndex]].push({
-            id: currentSectionId,
-            type: 'text',
-            title: cleanTitle,
-            content: '',
-            headingLevel: level,
-            numberingStyle: level === 2 ? 'bab_prefix_dot' : 'bab_prefix_double_dot'
-          });
-        } 
-        else if (tagName === 'table' || (tagName === 'div' && node.querySelector && node.querySelector('table'))) {
-          if (isSkipMode || !hasHitFirstBab) return;
-          const tableEl = tagName === 'table' ? node : node.querySelector('table');
-          if (!tableEl) return;
-          flushSection();
-          const bKey = babKeys[currentBabIndex];
-          const border = tableEl.getAttribute('border');
-          const isEquation = border === '0' || tableEl.classList.contains('equation-table');
-
-          if (isEquation) {
-            // Equation: formula in first cell, optional title <p>, optional "Keterangan" <p>
-            const cells = Array.from(tableEl.querySelectorAll('td, th'));
-            const formula = cells[0] ? cells[0].textContent.trim() : '';
-            let title = '';
-            let description = '';
-            if (tagName === 'div') {
-              const ps = Array.from(node.querySelectorAll('p'));
-              const titleP = ps.find(p => p.textContent.trim() && !/^keterangan/i.test(p.textContent.trim()));
-              if (titleP) title = titleP.textContent.trim();
-              const ketP = ps.find(p => /keterangan/i.test(p.textContent));
-              if (ketP) description = ketP.textContent.replace(/keterangan\s*:?/i, '').trim();
-            }
-            const eqSection = {
-              id: 'import_eq_' + Date.now() + Math.random(),
-              type: 'equation',
-              title: title || 'Rumus',
-              content: formula || 'y = f(x)',
-              description: description,
-              page: 1
-            };
-            newBabSections[bKey].push(eqSection);
-          } else {
-            const parsed = parseImportedTable(tableEl);
-            const caption = tagName === 'div' ? pickCaption(node) : '';
-            const tabSection = {
-              id: 'import_tab_' + Date.now() + Math.random(),
-              type: 'table',
-              title: caption || 'Tabel',
-              page: 1,
-              headers: parsed.headers,
-              rows: parsed.rows,
-              rowsText: parsed.rows.map(r => r.join(', ')).join('\n')
-            };
-            newBabSections[bKey].push(tabSection);
-            pendingBlock = { section: tabSection, kind: 'table' };
-          }
-          startContinuationSection(bKey);
-        }
-        else if (tagName === 'img' || (node.querySelector && node.querySelector('img')) || (tagName === 'div' && /\[Skema|Diagram/i.test(textContent))) {
-          if (isSkipMode || !hasHitFirstBab) return;
-          flushSection();
-          const bKey = babKeys[currentBabIndex];
-          const imgEl = tagName === 'img' ? node : (node.querySelector ? node.querySelector('img') : null);
-          const caption = (tagName === 'div' || hasImg) ? pickCaption(node) : '';
-          const figSection = {
-            id: 'import_fig_' + Date.now() + Math.random(),
-            type: 'figure',
-            title: caption || 'Gambar',
-            page: 1,
-            imageData: imgEl && imgEl.getAttribute('src') ? imgEl.getAttribute('src') : null
-          };
-          newBabSections[bKey].push(figSection);
-          pendingBlock = { section: figSection, kind: 'figure' };
-          startContinuationSection(bKey);
-        }
-        else if (tagName === 'p') {
-          if (isSkipMode || !hasHitFirstBab) return;
-          
-          if (!currentSectionId) {
-            currentSectionId = 'import_intro_' + Date.now() + Math.random();
-            newBabSections[babKeys[currentBabIndex]].push({
-              id: currentSectionId,
-              type: 'text',
-              title: '',
-              content: '',
-              headingLevel: 0,
-              numberingStyle: 'none'
-            });
-          }
-          currentContent.push(textContent);
-        } 
-        else if (tagName === 'ul' || tagName === 'ol') {
-          if (isSkipMode || !hasHitFirstBab) return;
-          
-          if (!currentSectionId) {
-            currentSectionId = 'import_intro_' + Date.now() + Math.random();
-            newBabSections[babKeys[currentBabIndex]].push({
-              id: currentSectionId,
-              type: 'text',
-              title: '',
-              content: '',
-              headingLevel: 0,
-              numberingStyle: 'none'
-            });
-          }
-          const listItems = Array.from(node.querySelectorAll('li')).map(li => '- ' + li.textContent.trim());
-          currentContent.push(listItems.join('\n'));
-        }
-      });
-      
-      flushSection();
-
-      // Clean up empty sections
-      babKeys.forEach(k => {
-        newBabSections[k] = newBabSections[k].filter(s => {
-          if (s.type !== 'text') return true; // keep tables/figures/equations
-          return (s.title || '').trim() !== '' || (s.content || '').trim() !== '';
-        });
-      });
-
-      // Heuristically extract cover information from front matter
-      const nonEmptyFront = frontMatterTexts.filter(x => x.text.length > 2);
-      let extTitle = '';
-      let extSubtitle = '';
-      let extAuthor = '';
-      let extNim = '';
-      let extProdi = '';
-      let extFakultas = '';
-      let extUniv = '';
-      let extCity = '';
-      let extYear = '';
-
-      // First pass: extract author name, NIM, prodi, fakultas, university, etc.
-      // to identify their line indices and avoid treating them as part of the title candidates
-      let authorLineIdx = -1;
-      let nimLineIdx = -1;
-
-      nonEmptyFront.forEach((item, index) => {
-        const text = item.text.trim();
-        
-        // NIM/NPM detection
-        const nimMatch = text.match(/(?:nim|npm)\s*:?\s*([0-9]{7,15})/i);
-        if (nimMatch) {
-          extNim = nimMatch[1];
-          nimLineIdx = index;
-        }
-
-        // Author name detection via Disusun Oleh / Oleh / Nama (flexible with/without colon)
-        if (/^(?:nama|disusun oleh|oleh)\b/i.test(text)) {
-          const afterColon = text.replace(/^(?:nama|disusun oleh|oleh)\s*:?\s*/i, '').trim();
-          if (afterColon && afterColon.length > 2) {
-            extAuthor = afterColon;
-          } else if (index + 1 < nonEmptyFront.length) {
-            extAuthor = nonEmptyFront[index + 1].text.trim();
-            authorLineIdx = index + 1;
-          }
-        }
-
-        // Prodi detection
-        if (/(?:program studi|prodi|jurusan)\s*:?\s*(.+)/i.test(text)) {
-          extProdi = text.replace(/(?:program studi|prodi|jurusan)\s*:?\s*/i, '').trim();
-        }
-
-        // Fakultas detection
-        if (/(?:fakultas)\s*:?\s*(.+)/i.test(text)) {
-          extFakultas = text.replace(/(?:fakultas)\s*:?\s*/i, '').trim();
-        }
-
-        // Universitas detection
-        if (/(?:universitas|institut|sekolah tinggi)\s*(.+)/i.test(text)) {
-          extUniv = text.trim();
-        }
-
-        // City & Year
-        const cityYearMatch = text.match(/^([A-Za-z\s]+),\s*(\d{4})$/);
-        if (cityYearMatch) {
-          extCity = cityYearMatch[1].trim();
-          extYear = cityYearMatch[2].trim();
-        } else {
-          const yearMatch = text.match(/\b(202\d|201\d|199\d)\b/);
-          if (yearMatch) {
-            extYear = yearMatch[1];
-          }
-        }
-      });
-
-      // Heuristic fallback for NIM and Author
-      if (!extNim || !extAuthor) {
-        nonEmptyFront.forEach((item, index) => {
-          const text = item.text.trim();
-          const isOnlyDigits = /^[0-9]{7,15}$/.test(text);
-          if (isOnlyDigits) {
-            extNim = text;
-            nimLineIdx = index;
-            if (index > 0 && !extAuthor) {
-              const prevText = nonEmptyFront[index - 1].text.trim();
-              if (prevText.length > 2 && prevText.length < 50 && !/^(oleh|disusun|nim|npm|skripsi|tesis|proposal|tugas|program|prodi|fakultas|universitas)/i.test(prevText)) {
-                extAuthor = prevText;
-                authorLineIdx = index - 1;
-              }
-            }
-          }
-        });
-      }
-
-      // City fallback
-      if (!extCity && nonEmptyFront.length > 0) {
-        for (let i = nonEmptyFront.length - 1; i >= Math.max(0, nonEmptyFront.length - 3); i--) {
-          const text = nonEmptyFront[i].text.trim();
-          if (/^[A-Za-z\s]+$/.test(text) && text.length > 3 && text.length < 30 && !/^(universitas|fakultas|prodi|program)/i.test(text)) {
-            extCity = text;
-            break;
-          }
-        }
-      }
-
-      // Second pass: extract Title & Subtitle via smart candidates selection, excluding identified metadata lines
-      const titleCandidates = [];
-      const subtitleCandidates = [];
-      
-      nonEmptyFront.slice(0, 25).forEach((item, index) => {
-        // Exclude lines identified as author or NIM
-        if (index === authorLineIdx || index === nimLineIdx) {
-          return;
-        }
-
-        const text = item.text.trim();
-        const lower = text.toLowerCase();
-        
-        // Skip lines that contain metadata keywords directly
-        if (/(?:oleh|disusun|nim|npm|program studi|prodi|jurusan|fakultas|universitas|institut|sekolah tinggi)/i.test(text)) {
-          return;
-        }
-        // Also skip digits only (looks like NIM or Year)
-        if (/^\d+$/.test(text)) {
-          return;
-        }
-        // Skip city/year lines like "CIANJUR, 2026", "Jakarta 2026", or a bare year
-        if (/^[A-Za-z.\s]+,?\s*(?:19|20)\d{2}\.?$/.test(text)) {
-          return;
-        }
-        if (/^(?:19|20)\d{2}$/.test(text)) {
-          return;
-        }
-        // Skip if it matches the detected city
-        if (extCity && text.toLowerCase().includes(extCity.toLowerCase()) && text.length < 30) {
-          return;
-        }
-
-        // Skip if it matches the detected author name directly
-        if (extAuthor && text.toLowerCase() === extAuthor.toLowerCase()) {
-          return;
-        }
-
-        // If it looks like a document type label (skripsi, proposal, tesis, etc.)
-        if (/^(skripsi|tesis|tugas akhir|laporan tugas akhir|proposal|usulan penelitian|laporan)/i.test(lower) && text.length < 50) {
-          subtitleCandidates.push(text);
-        } else if (text.length > 10 && text.length < 250) {
-          titleCandidates.push(text);
-        }
-      });
-
-      if (titleCandidates.length > 0) {
-        extTitle = titleCandidates.join(' ');
-      }
-      if (subtitleCandidates.length > 0) {
-        extSubtitle = subtitleCandidates[0];
-      }
-
-      // If we extracted title/author, set them
-      const updatedCover = {
-        title: extTitle || cover.title,
-        subtitle: extSubtitle || cover.subtitle,
-        author: extAuthor || cover.author,
-        nim: extNim || cover.nim,
-        prodi: extProdi || cover.prodi,
-        fakultas: extFakultas || cover.fakultas,
-        univ: extUniv || cover.univ,
-        city: extCity || cover.city,
-        year: extYear || cover.year,
-        logoType: cover.logoType,
-        logoData: cover.logoData
-      };
-
-      setCover(updatedCover);
-
-      const importedCoverElements = defaultCoverElements.map(el => {
-        if (el.field === 'title' && updatedCover.title) return { ...el, value: updatedCover.title.toUpperCase() };
-        if (el.field === 'subtitle' && updatedCover.subtitle) return { ...el, value: updatedCover.subtitle.toUpperCase() };
-        if (el.field === 'author' && updatedCover.author) return { ...el, value: updatedCover.author.toUpperCase() };
-        if (el.field === 'nim' && updatedCover.nim) return { ...el, value: updatedCover.nim };
-        if (el.field === 'prodi' && updatedCover.prodi) return { ...el, value: `PROGRAM STUDI ${updatedCover.prodi.toUpperCase()}` };
-        if (el.field === 'fakultas' && updatedCover.fakultas) return { ...el, value: updatedCover.fakultas.toUpperCase().startsWith('FAKULTAS') ? updatedCover.fakultas.toUpperCase() : `FAKULTAS ${updatedCover.fakultas.toUpperCase()}` };
-        if (el.field === 'univ' && updatedCover.univ) return { ...el, value: updatedCover.univ.toUpperCase() };
-        if (el.field === 'city_year') {
-          const cityStr = updatedCover.city || 'JAKARTA';
-          const yearStr = updatedCover.year || '2026';
-          return { ...el, value: `${cityStr.toUpperCase()}, ${yearStr}` };
-        }
-        return el;
-      });
-
-      setCoverElements(importedCoverElements);
-
-      setBabSections(newBabSections);
-      setBabTitles(newBabTitles);
-      
-      const updatedLayout = { ...layout, ...docLayoutSettings };
-      setLayout(updatedLayout);
-      const updatedHeadingStyles = Object.keys(docHeadingStyles).length > 0
-        ? {
-            ...headingStyles,
-            ...Object.fromEntries(
-              Object.entries(docHeadingStyles).map(([key, value]) => [
-                key,
-                { ...(headingStyles[key] || {}), ...value },
-              ])
-            ),
-          }
-        : headingStyles;
-      if (updatedHeadingStyles !== headingStyles) {
-        setHeadingStyles(updatedHeadingStyles);
-      }
-      
-      if (isCreateNew) {
-        saveLocalDraft({ 
-          babSections: newBabSections, 
-          saveFilename: newFilename,
-          cover: updatedCover,
-          coverElements: importedCoverElements,
-          babTitles: newBabTitles,
-          layout: updatedLayout,
-          headingStyles: updatedHeadingStyles
-        });
-      } else {
-        saveLocalDraft({ 
-          babSections: newBabSections,
-          cover: updatedCover,
-          coverElements: importedCoverElements,
-          babTitles: newBabTitles,
-          layout: updatedLayout,
-          headingStyles: updatedHeadingStyles
-        });
-      }
-      setHasLocalDraft(true);
-      setShowWelcomeModal(false);
-      showToast('Impor dokumen Word berhasil!');
-
-      if (isCreateNew) {
-        showToast("Sedang membuat draft baru di database...");
-        const draftPayload = {
-          layout: updatedLayout, 
-          cover: updatedCover, 
-          coverElements: importedCoverElements, 
-          babSections: newBabSections, 
-          babTitles: newBabTitles, 
-          references, 
-          refStyle, 
-          tables: getAllTables(newBabSections), 
-          figures: getAllFigures(newBabSections),
-          abstrakIndo, 
-          abstrakIndoKeywords, 
-          abstrakEng, 
-          abstrakEngKeywords, 
-          headingStyles: updatedHeadingStyles
-        };
-        try {
-          const response = await saveDraftRequest(newFilename, draftPayload);
-          const result = await response.json();
-          if (response.ok && result.success) {
-            setSaveFilename(newFilename);
-            autosaveConfirmedRef.current = newFilename;
-            showToast(`Draft baru "${newFilename}" berhasil dibuat!`);
-            fetchDraftsList();
-          } else {
-            showToast(result.message || "Gagal membuat draft baru di database.", true);
-          }
-        } catch (dbErr) {
-          console.error(dbErr);
-          showToast("Gagal menyimpan draft baru ke database: " + dbErr.message, true);
-        }
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('Gagal memproses dokumen: ' + err.message, true);
-    }
-    
-    e.target.value = ''; // Reset
-  };
+  const handleDocxImport = (event) => createWordImportHandler({
+    babTitles,
+    layout,
+    cover,
+    coverElements,
+    babSections,
+    references,
+    refStyle,
+    abstrakIndo,
+    abstrakIndoKeywords,
+    abstrakEng,
+    abstrakEngKeywords,
+    headingStyles,
+    defaultCoverElements,
+    setLayout,
+    setCover,
+    setCoverElements,
+    setBabSections,
+    setBabTitles,
+    setReferences,
+    setRefStyle,
+    setAbstrakIndo,
+    setAbstrakIndoKeywords,
+    setAbstrakEng,
+    setAbstrakEngKeywords,
+    setHeadingStyles,
+    setHasLocalDraft,
+    setShowWelcomeModal,
+    setShowDraftManager,
+    setSaveFilename,
+    setActiveDraftSlug,
+    autosaveConfirmedRef,
+    lastSavedPayloadRef,
+    getAllTables,
+    getAllFigures,
+    saveLocalDraft,
+    saveDraftToServer,
+    fetchDraftsList,
+    showToast,
+  })(event);
+  // ==========================================================================
 
   // ==========================================================================
   // DRAFT SAVING & PRINT INTEGRATION
@@ -5268,27 +4602,23 @@ export default function Index() {
       return;
     }
     
-    const draftPayload = {
-      layout, cover, coverElements, babSections, babTitles, references, refStyle, 
-      tables: getAllTables(), 
-      figures: getAllFigures(),
-      abstrakIndo, abstrakIndoKeywords, abstrakEng, abstrakEngKeywords, headingStyles
-    };
+    const draftPayload = buildCurrentDraftPayload();
 
     showToast("Sedang menyimpan draft...");
 
     try {
-      const response = await saveDraftRequest(saveFilename, draftPayload);
-
-      const result = await response.json();
+      const { response, result, payloadString } = await saveDraftToServer(saveFilename, draftPayload, { source: 'manual' });
       if (response.ok && result.success) {
-        showToast(result.message);
         autosaveConfirmedRef.current = saveFilename; // explicit save arms autosave for this draft
+        lastSavedPayloadRef.current = payloadString;
         fetchDraftsList();
-      } else {
-        showToast(result.message || "Gagal menyimpan draft.", true);
       }
     } catch (e) {
+      setSaveStatus(prev => ({
+        ...prev,
+        state: 'error',
+        message: `Gagal terhubung dengan server Laravel: ${e.message}`,
+      }));
       showToast("Gagal terhubung dengan server Laravel: " + e.message, true);
     }
   };
@@ -5299,7 +4629,7 @@ export default function Index() {
       const response = await loadDraftRequest(item.id, item.source);
 
       if (response.ok) {
-        const data = await response.json();
+        const data = await readJsonResponse(response);
         let loadedBabSections = babSections;
         if (data.layout) setLayout(data.layout);
         if (data.cover) setCover(data.cover);
@@ -5399,7 +4729,18 @@ export default function Index() {
         setShowDraftsModal(false);
         setShowWelcomeModal(false);
         
-        setSaveFilename(item.title);
+        const loadedSlug = item.slug || slugifyDraftFilename(item.title);
+        setSaveFilename(loadedSlug);
+        setActiveDraftSlug(loadedSlug);
+        setSaveStatus({
+          state: 'saved',
+          message: 'Draft server sedang dibuka',
+          mode: autosaveEnabled ? 'autosave' : 'manual',
+          bytes: 0,
+          progress: null,
+          slug: loadedSlug,
+          transport: item.source,
+        });
         autosaveConfirmedRef.current = null; // ask once before autosave overwrites this loaded draft
         const loadedPayload = {
           layout: data.layout || layout,
@@ -5448,7 +4789,7 @@ export default function Index() {
     try {
       const response = await listDraftsRequest();
       if (response.ok) {
-        const list = await response.json();
+        const list = await readJsonResponse(response);
         setDraftsList(list);
       }
     } catch (e) {
@@ -5466,8 +4807,8 @@ export default function Index() {
       const response = await deleteDraftRequest(item.id, item.source);
 
       if (response.ok) {
-        const result = await response.json().catch(() => ({ success: true }));
-        const activeSlug = (saveFilename || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+        const result = await readJsonResponse(response);
+        const activeSlug = activeDraftSlug || slugifyDraftFilename(saveFilename);
         const isActiveDraft = item.slug && item.slug === activeSlug;
         showToast("Draft berhasil dihapus.");
         fetchDraftsList();
@@ -6208,7 +5549,15 @@ export default function Index() {
 
                     <div className="space-y-3">
                       {resolveBlockNumberingForBab(activeSection, babSections[activeSection] || []).map((sec, idx) => (
-                        <div key={sec.id} className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
+                        <div
+                          key={sec.id}
+                          id={`content-editor-block-${sec.id}`}
+                          className={`p-3 bg-slate-50 dark:bg-slate-800/40 border rounded-xl space-y-2 scroll-mt-24 transition-colors ${
+                            focusedContentBlockId === sec.id
+                              ? 'border-indigo-500 ring-2 ring-indigo-500/20'
+                              : 'border-slate-200 dark:border-slate-800/60'
+                          }`}
+                        >
                            <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800/60 pb-1.5">
                              <span className="font-bold text-slate-400 text-[10px]">
                                {sec.type === 'table' 
@@ -6249,6 +5598,7 @@ export default function Index() {
                                <div>
                                  <label className="text-[9px] text-slate-400 block mb-0.5">Judul Tabel (Caption)</label>
                                  <input 
+                                   id={`content-title-${sec.id}`}
                                    type="text" 
                                    value={sec.title} 
                                    onChange={e => handleUpdateSectionField(activeSection, sec.id, 'title', e.target.value)} 
@@ -6628,6 +5978,7 @@ export default function Index() {
                               <div>
                                 <label className="text-[9px] text-slate-400 block mb-0.5">Judul Gambar (Caption)</label>
                                 <input 
+                                  id={`content-title-${sec.id}`}
                                   type="text" 
                                   value={sec.title} 
                                   onChange={e => handleUpdateSectionField(activeSection, sec.id, 'title', e.target.value)} 
@@ -6809,7 +6160,8 @@ export default function Index() {
                             <div className="space-y-2">
                               <div>
                                 <label className="text-[9px] text-slate-400 block mb-0.5">Judul/Nama Rumus (Caption)</label>
-                                <input 
+                                 <input 
+                                  id={`content-title-${sec.id}`}
                                   type="text" 
                                   value={sec.title} 
                                   onChange={e => handleUpdateSectionField(activeSection, sec.id, 'title', e.target.value)} 
@@ -6915,13 +6267,7 @@ export default function Index() {
                                        onChange={e => {
                                          const level = parseInt(e.target.value);
                                          handleUpdateSectionField(activeSection, sec.id, 'headingLevel', level);
-                                         if (level === 2) {
-                                           handleUpdateSectionField(activeSection, sec.id, 'numberingStyle', 'bab_prefix_dot');
-                                         } else if (level === 3) {
-                                           handleUpdateSectionField(activeSection, sec.id, 'numberingStyle', 'bab_prefix_double_dot');
-                                         } else if (level === 0) {
-                                           handleUpdateSectionField(activeSection, sec.id, 'numberingStyle', 'none');
-                                         }
+                                         handleUpdateSectionField(activeSection, sec.id, 'numberingStyle', getDefaultNumberingStyleForHeading(level));
                                        }} 
                                        className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-200"
                                      >
@@ -6943,8 +6289,8 @@ export default function Index() {
                                          className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
                                        >
                                          <option value="none">Tanpa Nomor</option>
-                                         <option value="bab_prefix_dot">1.1 (Sesuai Bab)</option>
-                                         <option value="bab_prefix_double_dot">1.1.1 (Suku Bab)</option>
+                                         <option value="bab_prefix_dot">Bertingkat sesuai heading (1.1)</option>
+                                         <option value="bab_prefix_double_dot">Bertingkat sesuai heading (1.1.1 / 1.1.1.1)</option>
                                          <option value="arabic_dot">1. 2. 3.</option>
                                          <option value="arabic_paren">1) 2) 3)</option>
                                          <option value="arabic_both_paren">(1) (2) (3)</option>
@@ -6963,6 +6309,7 @@ export default function Index() {
                                    <div>
                                      <label className="text-[9px] text-slate-400 block mb-0.5">Judul Sub-Bab (Caption)</label>
                                      <input 
+                                       id={`content-title-${sec.id}`}
                                        type="text" 
                                        value={sec.title} 
                                        onChange={e => handleUpdateSectionField(activeSection, sec.id, 'title', e.target.value)} 
@@ -7265,8 +6612,22 @@ export default function Index() {
           </div>
           <SidebarFooter
             saveFilename={saveFilename}
+            activeDraftSlug={activeDraftSlug}
+            targetDraftSlug={slugifyDraftFilename(saveFilename)}
+            saveStatus={saveStatus}
             autosaveEnabled={autosaveEnabled}
-            onSaveFilenameChange={setSaveFilename}
+            onSaveFilenameChange={(nextFilename) => {
+              setSaveFilename(nextFilename);
+              const nextSlug = slugifyDraftFilename(nextFilename);
+              setSaveStatus(prev => ({
+                ...prev,
+                state: activeDraftSlug && activeDraftSlug !== nextSlug ? 'idle' : prev.state,
+                message: activeDraftSlug && activeDraftSlug !== nextSlug
+                  ? 'Nama berubah. Simpan manual untuk memakai slug target ini.'
+                  : prev.message,
+                slug: nextSlug,
+              }));
+            }}
             onSaveDraft={handleSaveDraftDB}
             onOpenDraftManager={() => {
               fetchDraftsList();
@@ -7293,291 +6654,80 @@ export default function Index() {
         {/* ==========================================================================
            2. PREVIEW CANVAS AREA (RIGHT)
            ========================================================================== */}
-        <main className="flex-1 overflow-auto flex flex-col items-center p-8 bg-slate-300 dark:bg-slate-950/60 relative">
-          
-          {/* Zoom & PDF Title floating bar */}
-          <div className="sticky top-0 mb-6 bg-slate-900/85 border border-slate-700 backdrop-blur-md px-4 py-2 rounded-full flex items-center gap-4 text-slate-100 shadow-xl no-print z-30">
-            <div className="flex items-center gap-2 border-r border-slate-700 pr-4 text-xs font-semibold text-slate-300">
-              <GraduationCap className="h-4 w-4 text-indigo-400" />
-              <span>{cleanDocTitle()}</span>
-            </div>
-
-            {/* Active draft indicator */}
-            {(() => {
-              const isUnsaved = !saveFilename || saveFilename === 'Draft_Skripsi';
-              return (
-                <div className="flex items-center gap-1.5 border-r border-slate-700 pr-4 text-[11px]" title={isUnsaved ? 'Draft belum disimpan ke database' : `Draft aktif: ${saveFilename}`}>
-                  <FolderOpen className={`h-3.5 w-3.5 ${isUnsaved ? 'text-amber-400' : 'text-emerald-400'}`} />
-                  {isUnsaved ? (
-                    <span className="text-amber-400 font-semibold">Belum disimpan</span>
-                  ) : (
-                    <span className="flex items-center gap-1.5">
-                      <span className="text-slate-200 font-semibold max-w-[180px] truncate">{saveFilename}</span>
-                      <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wide ${autosaveEnabled ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-700 text-slate-400'}`}>
-                        {autosaveEnabled ? 'Autosave' : 'Manual'}
-                      </span>
-                    </span>
-                  )}
-                </div>
-              );
-            })()}
-            
-            <div className="flex items-center gap-3">
-              <button onClick={() => setZoomLevel(prev => Math.max(prev - 10, 40))} className="hover:bg-slate-800 p-1.5 rounded-full"><ZoomOut className="h-4 w-4" /></button>
-              <span className="font-mono text-xs w-10 text-center">{zoomLevel}%</span>
-              <button onClick={() => setZoomLevel(prev => Math.min(prev + 10, 140))} className="hover:bg-slate-800 p-1.5 rounded-full"><ZoomIn className="h-4 w-4" /></button>
-              <button
-                type="button"
-                onClick={() => setShowMarginGuide(prev => !prev)}
-                className={`p-1.5 rounded-full transition-colors ${showMarginGuide ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 text-slate-300'}`}
-                title={showMarginGuide ? 'Sembunyikan garis margin' : 'Tampilkan garis margin'}
-                aria-pressed={showMarginGuide}
-              >
-                <Ruler className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-
-          {/* Active Editing Formatting Toolbar */}
-          {inlineEditingBlockId && inlineEditingBabKey && (() => {
+        <DocumentCanvas
+          title={cleanDocTitle()}
+          saveFilename={saveFilename}
+          autosaveEnabled={autosaveEnabled}
+          zoomLevel={zoomLevel}
+          onZoomOut={() => setZoomLevel(prev => Math.max(prev - 10, 40))}
+          onZoomIn={() => setZoomLevel(prev => Math.min(prev + 10, 140))}
+          showRuler={showMarginGuide}
+          onToggleRuler={() => setShowMarginGuide(prev => !prev)}
+          layout={layout}
+          activeBabKey={inlineEditingBabKey}
+          activeSection={inlineEditingBlockId && inlineEditingBabKey ? babSections[inlineEditingBabKey]?.find(x => x.id === inlineEditingBlockId) : null}
+          onUpdateSectionField={handleUpdateSectionField}
+          onApplyParagraphAlignment={applyParagraphAlignment}
+          onBackgroundClick={handlePreviewBackgroundClick}
+          toolbar={(
+            <>
+              {/* Active Editing Formatting Toolbar */}
+              {inlineEditingBlockId && inlineEditingBabKey && (() => {
             const sec = babSections[inlineEditingBabKey]?.find(x => x.id === inlineEditingBlockId);
             if (!sec) return null;
-            
+
             const activeIndex = babSections[inlineEditingBabKey]?.findIndex(x => x.id === inlineEditingBlockId);
             const isFirst = activeIndex === 0;
             const isLast = activeIndex === (babSections[inlineEditingBabKey]?.length - 1);
             const legacyKey = legacySectionKeyMapping[sec.id];
             const displayTitle = sec.title || 'Sub-Bab';
             const isGenerating = generatingSection === sec.id;
-            
+
             return (
-              <div 
-                className="sticky top-14 mb-4 bg-slate-900/90 dark:bg-slate-950/95 border border-slate-700/80 backdrop-blur-md px-4 py-2 rounded-full flex flex-wrap items-center gap-3 text-slate-100 shadow-xl no-print z-30 animate-in fade-in slide-in-from-top-2 duration-200 inline-editor-toolbar"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="flex items-center gap-1">
-                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider shrink-0 mr-1">Teks:</span>
-                  <select
-                    value={sec.headingLevel}
-                    onChange={e => {
-                      const level = parseInt(e.target.value);
-                      handleUpdateSectionField(inlineEditingBabKey, sec.id, 'headingLevel', level);
-                      if (level === 2) {
-                        handleUpdateSectionField(inlineEditingBabKey, sec.id, 'numberingStyle', 'bab_prefix_dot');
-                      } else if (level === 3) {
-                        handleUpdateSectionField(inlineEditingBabKey, sec.id, 'numberingStyle', 'bab_prefix_double_dot');
-                      }
-                    }}
-                    className="bg-slate-800 dark:bg-slate-900 border border-slate-700 py-1 px-2 rounded text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-bold cursor-pointer"
-                  >
-                    <option value={0}>Paragraf Biasa</option>
-                    <option value={2}>Heading 2 (Sub-Bab)</option>
-                    <option value={3}>Heading 3 (Suku Bab)</option>
-                    <option value={4}>Heading 4 (Sub Heading 4)</option>
-                  </select>
-                </div>
-
-                <div className="flex items-center gap-1">
-                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider shrink-0 mr-1">Nomor:</span>
-                  <select
-                    value={sec.numberingStyle || 'none'}
-                    onChange={e => handleUpdateSectionField(inlineEditingBabKey, sec.id, 'numberingStyle', e.target.value)}
-                    className="bg-slate-800 dark:bg-slate-900 border border-slate-700 py-1 px-2 rounded text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-bold cursor-pointer"
-                  >
-                    <option value="none">Tanpa Nomor</option>
-                    <option value="bab_prefix_dot">1.1 (Sesuai Bab)</option>
-                    <option value="bab_prefix_double_dot">1.1.1 (Suku Bab)</option>
-                    <option value="arabic_dot">1. 2. 3.</option>
-                    <option value="arabic_paren">1) 2) 3)</option>
-                    <option value="alpha_dot_lower">a. b. c.</option>
-                  </select>
-                </div>
-
-                <div className="h-5 w-[1px] bg-slate-700/80 mx-1"></div>
-
-                {/* CLIPBOARD GROUP */}
-                <div className="flex items-center gap-0.5">
-                  <button type="button" onClick={() => inlineClipboard(inlineEditingBabKey, sec, 'cut')} className="hover:bg-slate-800 p-1.5 rounded text-slate-300 hover:text-white transition-colors" title="Potong (Cut)"><Scissors className="h-3.5 w-3.5" /></button>
-                  <button type="button" onClick={() => inlineClipboard(inlineEditingBabKey, sec, 'copy')} className="hover:bg-slate-800 p-1.5 rounded text-slate-300 hover:text-white transition-colors" title="Salin (Copy)"><Copy className="h-3.5 w-3.5" /></button>
-                  <button type="button" onClick={() => inlineClipboard(inlineEditingBabKey, sec, 'paste')} className="hover:bg-slate-800 p-1.5 rounded text-slate-300 hover:text-white transition-colors" title="Tempel (Paste)"><ClipboardPaste className="h-3.5 w-3.5" /></button>
-                </div>
-
-                <div className="h-5 w-[1px] bg-slate-700/80 mx-1"></div>
-
-                {/* FONT GROUP */}
-                <div className="flex items-center gap-0.5">
-                  <button type="button" onClick={() => wrapInlineSelection(inlineEditingBabKey, sec, '**')} className="hover:bg-slate-800 p-1.5 rounded text-slate-200 hover:text-white transition-colors font-bold" title="Tebal (Bold)"><Bold className="h-3.5 w-3.5" /></button>
-                  <button type="button" onClick={() => wrapInlineSelection(inlineEditingBabKey, sec, '*')} className="hover:bg-slate-800 p-1.5 rounded text-slate-200 hover:text-white transition-colors" title="Miring (Italic)"><Italic className="h-3.5 w-3.5" /></button>
-                  <button type="button" onClick={() => wrapInlineSelection(inlineEditingBabKey, sec, '__')} className="hover:bg-slate-800 p-1.5 rounded text-slate-200 hover:text-white transition-colors" title="Garis Bawah (Underline)"><Underline className="h-3.5 w-3.5" /></button>
-                  <button type="button" onClick={() => wrapInlineSelection(inlineEditingBabKey, sec, '~~')} className="hover:bg-slate-800 p-1.5 rounded text-slate-200 hover:text-white transition-colors" title="Coret (Strikethrough)"><Strikethrough className="h-3.5 w-3.5" /></button>
-                  <button type="button" onClick={() => clearInlineFormatting(inlineEditingBabKey, sec)} className="hover:bg-slate-800 p-1.5 rounded text-slate-400 hover:text-white transition-colors" title="Hapus Format"><RemoveFormatting className="h-3.5 w-3.5" /></button>
-                </div>
-
-                <div className="h-5 w-[1px] bg-slate-700/80 mx-1"></div>
-
-                {/* PARAGRAPH GROUP */}
-                <div className="flex items-center gap-0.5">
-                  <button type="button" onClick={() => applyLinePrefix(inlineEditingBabKey, sec, 'bullet')} className="hover:bg-slate-800 p-1.5 rounded text-slate-200 hover:text-white transition-colors" title="Daftar Berpoin (Bullet List)"><List className="h-3.5 w-3.5" /></button>
-                  <button type="button" onClick={() => applyLinePrefix(inlineEditingBabKey, sec, 'numbered')} className="hover:bg-slate-800 p-1.5 rounded text-slate-200 hover:text-white transition-colors" title="Daftar Bernomor (Numbered List)"><ListOrdered className="h-3.5 w-3.5" /></button>
-                </div>
-
-                <div className="h-5 w-[1px] bg-slate-700/80 mx-1"></div>
-
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const textarea = document.getElementById(`inline-textarea-${sec.id}`);
-                      let newContent = sec.content || '';
-                      if (textarea) {
-                        const start = textarea.selectionStart;
-                        const end = textarea.selectionEnd;
-                        newContent = newContent.substring(0, start) + "\n[pagebreak]\n" + newContent.substring(end);
-                        handleUpdateSectionField(inlineEditingBabKey, sec.id, 'content', newContent);
-                        setTimeout(() => {
-                          textarea.focus();
-                          textarea.setSelectionRange(start + 13, start + 13);
-                        }, 50);
-                      } else {
-                        handleUpdateSectionField(inlineEditingBabKey, sec.id, 'content', newContent + "\n[pagebreak]\n");
-                      }
-                    }}
-                    className="hover:bg-slate-800 p-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 text-indigo-400 hover:text-indigo-300 transition-colors"
-                    title="Buat halaman baru dari titik cursor"
-                  >
-                    📄 Halaman Baru
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const cleaned = cleanLineBreaks(sec.content);
-                      handleUpdateSectionField(inlineEditingBabKey, sec.id, 'content', cleaned);
-                      showToast("Paragraf berhasil dirapikan!");
-                    }}
-                    className="hover:bg-slate-800 p-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 text-emerald-400 hover:text-emerald-350 transition-colors"
-                    title="Menghapus spasi dan enter berlebih (akibat copy-paste PDF)"
-                  >
-                    ✨ Rapikan Spasi
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={!!generatingSection}
-                    onClick={() => triggerAIGenerateFlow({ babKey: inlineEditingBabKey, id: sec.id, displayTitle, legacyKey })}
-                    className="hover:bg-slate-800 p-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 text-amber-400 hover:text-amber-350 transition-colors disabled:opacity-40"
-                    title="Tulis otomatis isi konten menggunakan AI"
-                  >
-                    {isGenerating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                    AI Tulis
-                  </button>
-
-                  {sec.type === 'text' && (
-                    <>
-                      <div className="h-4 w-[1px] bg-slate-800 mx-1 inline-block"></div>
-                      <button
-                        type="button"
-                        onClick={() => handleSplitTextAndInsert(inlineEditingBabKey, sec.id, 'figure')}
-                        className="hover:bg-slate-800 p-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 text-sky-400 hover:text-sky-350 transition-colors"
-                        title="Pecah paragraf di kursor dan sisipkan gambar"
-                      >
-                        🖼️ Gambar (Kursor)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleSplitTextAndInsert(inlineEditingBabKey, sec.id, 'table')}
-                        className="hover:bg-slate-800 p-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 text-sky-400 hover:text-sky-350 transition-colors"
-                        title="Pecah paragraf di kursor dan sisipkan tabel"
-                      >
-                        📊 Tabel (Kursor)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleSplitTextAndInsert(inlineEditingBabKey, sec.id, 'split')}
-                        className="hover:bg-slate-800 p-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 text-teal-400 hover:text-teal-350 transition-colors"
-                        title="Pecah paragraf menjadi dua di kursor"
-                      >
-                        ✂️ Pecah
-                      </button>
-                    </>
-                  )}
-                </div>
-
-                <div className="h-5 w-[1px] bg-slate-700/80 mx-1"></div>
-
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    disabled={isFirst}
-                    onClick={() => handleMoveSection(inlineEditingBabKey, activeIndex, -1)}
-                    className="p-1 px-2.5 text-[11px] hover:bg-slate-850 rounded text-slate-300 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent"
-                    title="Naikkan posisi blok ini"
-                  >
-                    Naik ↑
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isLast}
-                    onClick={() => handleMoveSection(inlineEditingBabKey, activeIndex, 1)}
-                    className="p-1 px-2.5 text-[11px] hover:bg-slate-850 rounded text-slate-300 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent"
-                    title="Turunkan posisi blok ini"
-                  >
-                    Turun ↓
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (confirm("Hapus blok konten ini?")) {
-                        setInlineEditingBlockId(null);
-                        setInlineEditingBabKey(null);
-                        setBabSections(prev => {
-                          const updatedList = prev[inlineEditingBabKey].filter(x => x.id !== sec.id);
-                          const updated = { ...prev, [inlineEditingBabKey]: updatedList };
-                          saveLocalDraft({ babSections: updated });
-                          return updated;
-                        });
-                        showToast("Blok konten berhasil dihapus.");
-                      }
-                    }}
-                    className="p-1 px-2.5 text-[11px] hover:bg-slate-850 rounded text-red-400 hover:text-red-350 transition-colors"
-                    title="Hapus blok konten ini"
-                  >
-                    Hapus 🗑️
-                  </button>
-                </div>
-
-                <div className="h-5 w-[1px] bg-slate-700/80 mx-1"></div>
-
-                <button
-                  type="button"
-                  onClick={() => {
+              <InlineEditorToolbar
+                babKey={inlineEditingBabKey}
+                section={sec}
+                activeIndex={activeIndex}
+                isFirst={isFirst}
+                isLast={isLast}
+                legacyKey={legacyKey}
+                displayTitle={displayTitle}
+                isGenerating={isGenerating}
+                hasGeneratingSection={!!generatingSection}
+                cleanLineBreaks={cleanLineBreaks}
+                onUpdateSectionField={handleUpdateSectionField}
+                onClipboard={inlineClipboard}
+                onWrapSelection={wrapInlineSelection}
+                onClearFormatting={clearInlineFormatting}
+                onApplyParagraphAlignment={applyParagraphAlignment}
+                onApplyLinePrefix={applyLinePrefix}
+                onSplitTextAndInsert={handleSplitTextAndInsert}
+                onMoveSection={handleMoveSection}
+                onDeleteSection={(babKey, sectionId) => {
+                  if (confirm('Hapus blok konten ini?')) {
                     setInlineEditingBlockId(null);
                     setInlineEditingBabKey(null);
-                  }}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1 px-3.5 rounded-full text-[11px] transition-colors shadow-md shadow-indigo-600/10"
-                >
-                  Selesai
-                </button>
-              </div>
+                    setBabSections(prev => {
+                      const updatedList = prev[babKey].filter(x => x.id !== sectionId);
+                      const updated = { ...prev, [babKey]: updatedList };
+                      saveLocalDraft({ babSections: updated });
+                      return updated;
+                    });
+                    showToast('Blok konten berhasil dihapus.');
+                  }
+                }}
+                onTriggerAIGenerate={triggerAIGenerateFlow}
+                onDone={() => {
+                  setInlineEditingBlockId(null);
+                  setInlineEditingBabKey(null);
+                }}
+                showToast={showToast}
+              />
             );
           })()}
-
-          {/* Scale transformer for preview paper */}
-          <div className="flex flex-col items-center origin-top transition-transform duration-200" style={{ transform: `scale(${zoomLevel / 100})` }} onClick={handlePreviewBackgroundClick}>
-            <div 
-              className={`flex flex-col gap-8 pb-32 ${showMarginGuide ? 'show-margin-guide' : ''}`}
-              style={{
-                '--doc-margin-top': `${layout.marginTop}cm`,
-                '--doc-margin-left': `${layout.marginLeft}cm`,
-                '--doc-margin-bottom': `${layout.marginBottom}cm`,
-                '--doc-margin-right': `${layout.marginRight}cm`,
-                '--doc-font-family': layout.fontFamily,
-                '--doc-font-size': layout.fontSize,
-                '--doc-line-spacing': layout.lineSpacing,
-                '--doc-text-align': layout.textAlign,
-                '--doc-text-indent': layout.paragraphIndent === 'indented' ? '1.25cm' : '0cm'
-              }}
-            >
+            </>
+          )}
+        >
               
               {/* PAGE 1: COVER Sampul */}
               <div className={`a4-page relative ${getPagePrintClass('cover')}`} id="page-cover">
@@ -8068,10 +7218,7 @@ export default function Index() {
                   </div>
                 );
               })}
-
-            </div>
-          </div>
-        </main>
+        </DocumentCanvas>
       </div>
 
       <DraftManager
@@ -8173,3 +7320,5 @@ export default function Index() {
     </>
   );
 }
+
+

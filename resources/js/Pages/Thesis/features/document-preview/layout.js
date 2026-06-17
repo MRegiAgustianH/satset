@@ -6,137 +6,19 @@ import {
   getLineHeightPx,
   getLayoutNumber,
 } from './pagination';
+export {
+  convertToAlpha,
+  convertToRoman,
+  getDefaultNumberingStyleForHeading,
+  resolveBlockNumberingForBab,
+} from './numbering';
+import { resolveBlockNumberingForBab } from './numbering';
 
 const CM_TO_PX = 37.795;
 const PAGE_WIDTH_CM = 21;
 const PAGE_HEIGHT_CM = 29.7;
 const DEFAULT_FIGURE_WIDTH_CM = 12;
 const DEFAULT_FIGURE_HEIGHT_CM = 8;
-
-export const convertToAlpha = (num) => {
-  let s = '';
-  let temp = num;
-  while (temp > 0) {
-    const t = (temp - 1) % 26;
-    s = String.fromCharCode(97 + t) + s;
-    temp = Math.floor((temp - t) / 26);
-  }
-  return s || 'a';
-};
-
-export const convertToRoman = (num) => {
-  const romanMap = [
-    { value: 1000, symbol: 'M' },
-    { value: 900, symbol: 'CM' },
-    { value: 500, symbol: 'D' },
-    { value: 400, symbol: 'CD' },
-    { value: 100, symbol: 'C' },
-    { value: 90, symbol: 'XC' },
-    { value: 50, symbol: 'L' },
-    { value: 40, symbol: 'XL' },
-    { value: 10, symbol: 'X' },
-    { value: 9, symbol: 'IX' },
-    { value: 5, symbol: 'V' },
-    { value: 4, symbol: 'IV' },
-    { value: 1, symbol: 'I' },
-  ];
-
-  let s = '';
-  let temp = num;
-  for (let i = 0; i < romanMap.length; i++) {
-    while (temp >= romanMap[i].value) {
-      s += romanMap[i].symbol;
-      temp -= romanMap[i].value;
-    }
-  }
-  return s || 'I';
-};
-
-export const resolveBlockNumberingForBab = (babKey, sections) => {
-  if (!sections) return [];
-  const babMatch = babKey.match(/\d+/);
-  const babNum = babMatch ? parseInt(babMatch[0], 10) : 1;
-
-  let dotVal = 0;
-  let doubleDotVal = 0;
-  let arabicDotVal = 0;
-  let arabicParenVal = 0;
-  let arabicBothParenVal = 0;
-  let alphaDotLowerVal = 0;
-  let alphaDotUpperVal = 0;
-  let alphaParenLowerVal = 0;
-  let alphaBothParenLowerVal = 0;
-  let romanDotUpperVal = 0;
-  let romanDotLowerVal = 0;
-
-  return sections.map((section) => {
-    if (section.type !== 'text') {
-      return { ...section, resolvedPrefix: '' };
-    }
-
-    let prefix = '';
-    const style = section.numberingStyle || 'none';
-
-    if (style === 'bab_prefix_dot') {
-      dotVal++;
-      doubleDotVal = 0;
-      arabicDotVal = 0;
-      arabicParenVal = 0;
-      arabicBothParenVal = 0;
-      alphaDotLowerVal = 0;
-      alphaDotUpperVal = 0;
-      alphaParenLowerVal = 0;
-      alphaBothParenLowerVal = 0;
-      romanDotUpperVal = 0;
-      romanDotLowerVal = 0;
-      prefix = `${babNum}.${dotVal} `;
-    } else if (style === 'bab_prefix_double_dot') {
-      doubleDotVal++;
-      arabicDotVal = 0;
-      arabicParenVal = 0;
-      arabicBothParenVal = 0;
-      alphaDotLowerVal = 0;
-      alphaDotUpperVal = 0;
-      alphaParenLowerVal = 0;
-      alphaBothParenLowerVal = 0;
-      romanDotUpperVal = 0;
-      romanDotLowerVal = 0;
-      prefix = `${babNum}.${dotVal || 1}.${doubleDotVal} `;
-    } else if (style === 'arabic_dot') {
-      arabicDotVal++;
-      prefix = `${arabicDotVal}. `;
-    } else if (style === 'arabic_paren') {
-      arabicParenVal++;
-      prefix = `${arabicParenVal}) `;
-    } else if (style === 'arabic_both_paren') {
-      arabicBothParenVal++;
-      prefix = `(${arabicBothParenVal}) `;
-    } else if (style === 'alpha_dot_lower') {
-      alphaDotLowerVal++;
-      prefix = `${convertToAlpha(alphaDotLowerVal)}. `;
-    } else if (style === 'alpha_dot_upper') {
-      alphaDotUpperVal++;
-      prefix = `${convertToAlpha(alphaDotUpperVal).toUpperCase()}. `;
-    } else if (style === 'alpha_paren_lower') {
-      alphaParenLowerVal++;
-      prefix = `${convertToAlpha(alphaParenLowerVal)}) `;
-    } else if (style === 'alpha_both_paren_lower') {
-      alphaBothParenLowerVal++;
-      prefix = `(${convertToAlpha(alphaBothParenLowerVal)}) `;
-    } else if (style === 'roman_dot_upper') {
-      romanDotUpperVal++;
-      prefix = `${convertToRoman(romanDotUpperVal)}. `;
-    } else if (style === 'roman_dot_lower') {
-      romanDotLowerVal++;
-      prefix = `${convertToRoman(romanDotLowerVal).toLowerCase()}. `;
-    }
-
-    return {
-      ...section,
-      resolvedPrefix: prefix,
-    };
-  });
-};
 
 const getFigureAspectRatio = (figure) => {
   const storedRatio = parseFloat(figure.imgAspectRatio);
@@ -168,6 +50,10 @@ const getFigureHeightPx = (figure, layout) => {
 
   return Math.max(2, heightCm) * CM_TO_PX;
 };
+
+const getParagraphAlignment = (section, paragraphIndex) => (
+  section.paragraphAlignments?.[paragraphIndex] || section.textAlign || null
+);
 
 const estimateElementHeight = (el, layout) => {
   const widthPx = getContentWidthPx(layout);
@@ -256,7 +142,7 @@ const buildBabSubElements = (babKey, rawSections) => {
 
     if (section.content && section.content.trim()) {
       const paragraphs = section.content.split(/\n+/).filter((p) => p.trim());
-      paragraphs.forEach((paragraph) => {
+      paragraphs.forEach((paragraph, paragraphIndex) => {
         const cleanedText = paragraph.trim();
         if (cleanedText === '---') {
           subElements.push({ type: 'pagebreak', blockId: section.id });
@@ -267,7 +153,16 @@ const buildBabSubElements = (babKey, rawSections) => {
         parts.forEach((part, index) => {
           const cleanedPart = part.trim();
           if (cleanedPart) {
-            subElements.push({ type: 'paragraph', blockId: section.id, text: cleanedPart });
+            subElements.push({
+              type: 'paragraph',
+              blockId: section.id,
+              text: cleanedPart,
+              paragraphIndex,
+              textAlign: getParagraphAlignment(section, paragraphIndex),
+              firstLineIndentCm: section.firstLineIndentCm ?? null,
+              leftIndentCm: section.leftIndentCm ?? null,
+              rightIndentCm: section.rightIndentCm ?? null,
+            });
           }
           if (index < parts.length - 1) {
             subElements.push({ type: 'pagebreak', blockId: section.id });
