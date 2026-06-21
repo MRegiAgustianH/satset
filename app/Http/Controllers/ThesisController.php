@@ -31,6 +31,109 @@ class ThesisController extends Controller
             ?? config('services.gemini.key');
     }
 
+    private function buildAcademicContext(?string $fakultas, ?string $prodi): string
+    {
+        $department = strtolower(($fakultas ?? '') . ' ' . ($prodi ?? ''));
+        $base = "Konteks aplikasi: web ini membantu penyusunan laporan akademik untuk semua jurusan kuliah, dengan prioritas jurusan teknik. Gunakan gaya panduan akademik Indonesia yang lazim di perguruan tinggi besar seperti UI, UGM, ITB, ITS, UNPAD, dan kampus teknik lain tanpa mengarang nama dokumen spesifik.";
+
+        if (str_contains($department, 'informatika') || str_contains($department, 'sistem informasi') || str_contains($department, 'komputer') || str_contains($department, 'teknologi informasi')) {
+            return $base . " Fokus prodi Informatika/SI: arahkan pada pembuatan perangkat lunak, analisis kebutuhan, APSI, SDLC Waterfall/Agile/Prototype/Scrum, pengujian black-box/white-box/UAT, basis data, serta diagram BPMN, Use Case, Activity, Sequence, Class Diagram, dan ERD. Jika diminta diagram, berikan struktur node-relasi yang mudah digambar pada graph/canvas.";
+        }
+
+        if (str_contains($department, 'sipil')) {
+            return $base . " Fokus Teknik Sipil: sesuaikan dengan struktur laporan perencanaan, struktur, transportasi, geoteknik, hidrologi, manajemen konstruksi, metode observasi lapangan/laboratorium, analisis standar teknis, serta penyajian data perhitungan, gambar kerja, dan tabel hasil uji secara akademik.";
+        }
+
+        if (str_contains($department, 'industri')) {
+            return $base . " Fokus Teknik Industri: sesuaikan dengan ergonomi, optimasi, manajemen operasi, supply chain, quality control, lean manufacturing, simulasi, peramalan, tata letak fasilitas, pengukuran kerja, dan metode relevan seperti AHP, TOPSIS, ANP, Six Sigma, FMEA, QFD, EOQ, MRP, serta analisis produktivitas.";
+        }
+
+        return $base . " Untuk prodi non-teknik, tetap gunakan struktur laporan ilmiah umum: pendahuluan, tinjauan pustaka, metodologi, hasil-pembahasan, kesimpulan-saran, dan sesuaikan metode dengan disiplin ilmunya.";
+    }
+
+    private function callGeminiJson(string $apiKey, string $prompt)
+    {
+        return $this->postGemini($apiKey, [
+            'contents' => [[
+                'parts' => [['text' => $prompt]],
+            ]],
+            'generationConfig' => [
+                'responseMimeType' => 'application/json',
+            ],
+        ]);
+    }
+
+    private function postGemini(string $apiKey, array $payload)
+    {
+        $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}";
+        $verifySsl = filter_var(env('GEMINI_VERIFY_SSL', true), FILTER_VALIDATE_BOOL);
+
+        return Http::withOptions(['verify' => $verifySsl])->post($url, $payload);
+    }
+
+    private function buildDynamicSectionInstruction(string $sectionTitle): string
+    {
+        $normalizedTitle = strtolower($sectionTitle);
+
+        if (str_contains($normalizedTitle, 'maksud') || str_contains($normalizedTitle, 'tujuan')) {
+            return "ARAHAN KHUSUS SUB-BAB 'MAKSUD DAN TUJUAN':
+- Jangan menulis Rumusan Masalah, Identifikasi Masalah, Latar Belakang, atau daftar pertanyaan penelitian.
+- Awali dengan narasi singkat tentang maksud penelitian, yaitu alasan umum/arah besar penelitian dilakukan.
+- Lanjutkan dengan tujuan penelitian dalam bentuk poin bernomor yang menjawab secara langsung rumusan masalah yang sudah ada sebelumnya.
+- Gunakan frasa operasional seperti menganalisis, merancang, membangun, mengimplementasikan, menguji, mengevaluasi, atau mengukur sesuai judul penelitian.
+- Jangan mengulang kalimat 'Rumusan Masalah disusun...' dan jangan membuat pertanyaan baru.";
+        }
+
+        if (str_contains($normalizedTitle, 'manfaat')) {
+            return "ARAHAN KHUSUS SUB-BAB 'MANFAAT': tulis manfaat teoretis dan praktis. Jangan menulis rumusan masalah atau tujuan. Kelompokkan manfaat bagi peneliti, objek penelitian/instansi, pengguna, dan peneliti selanjutnya jika relevan.";
+        }
+
+        if (str_contains($normalizedTitle, 'batasan')) {
+            return "ARAHAN KHUSUS SUB-BAB 'BATASAN MASALAH': tulis batas ruang lingkup penelitian dalam poin bernomor. Jangan menulis tujuan atau rumusan masalah. Batasan harus spesifik pada objek, fitur, data, metode, waktu, dan teknologi yang digunakan.";
+        }
+
+        if (str_contains($normalizedTitle, 'sistematika')) {
+            return "ARAHAN KHUSUS SUB-BAB 'SISTEMATIKA PENULISAN': jelaskan isi setiap BAB secara ringkas dari BAB I sampai BAB terakhir. Jangan menulis rumusan masalah, tujuan, atau latar belakang.";
+        }
+
+        return "ARAHAN KHUSUS: Wajib fokus hanya pada judul sub-bab target. Jangan mengganti topik menjadi sub-bab lain seperti Rumusan Masalah, Latar Belakang, Identifikasi Masalah, Manfaat, atau Batasan Masalah kecuali judul target memang itu.";
+    }
+
+    private function cleanGeneratedSectionContent(string $content, string $sectionTitle = ''): string
+    {
+        $lines = preg_split('/\R/', trim($content));
+        $cleanedLines = [];
+        $skipHeadingPatterns = [
+            '/^\s*BAB\s+[IVXLCDM0-9]+\s*$/i',
+            '/^\s*(PENDAHULUAN|TINJAUAN\s+PUSTAKA|LANDASAN\s+TEORI|METODOLOGI\s+PENELITIAN|ANALISIS\s+DAN\s+PERANCANGAN|HASIL\s+DAN\s+PEMBAHASAN|PENUTUP)\s*$/i',
+            '/^\s*\d+(?:\.\d+)+\s+(Rumusan\s+Masalah|Latar\s+Belakang|Identifikasi\s+Masalah|Maksud\s+dan\s+Tujuan|Tujuan\s+Penelitian|Manfaat\s+Penelitian|Batasan\s+Masalah)\s*$/i',
+            '/^\s*(Rumusan\s+Masalah|Latar\s+Belakang\s+Masalah|Identifikasi\s+Masalah|Maksud\s+dan\s+Tujuan)\s*$/i',
+        ];
+
+        foreach ($lines as $line) {
+            $shouldSkip = false;
+            foreach ($skipHeadingPatterns as $pattern) {
+                if (preg_match($pattern, $line)) {
+                    $shouldSkip = true;
+                    break;
+                }
+            }
+            if (!$shouldSkip) {
+                $cleanedLines[] = $line;
+            }
+        }
+
+        $cleaned = trim(implode("\n", $cleanedLines));
+        $normalizedTitle = strtolower($sectionTitle);
+
+        if ((str_contains($normalizedTitle, 'maksud') || str_contains($normalizedTitle, 'tujuan'))
+            && preg_match('/^\s*Rumusan\s+Masalah\b/i', $cleaned)) {
+            $cleaned = preg_replace('/^\s*Rumusan\s+Masalah\b\s*/i', '', $cleaned);
+        }
+
+        return trim($cleaned);
+    }
+
     /**
      * Recommend thesis titles and research methods based on department and topic.
      */
@@ -72,20 +175,7 @@ PENTING: Anda harus mengembalikan respon dalam format JSON array yang valid tanp
 ]";
 
         try {
-            $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}";
-            
-            $response = Http::post($url, [
-                'contents' => [
-                    [
-                        'parts' => [
-                            ['text' => $prompt]
-                        ]
-                    ]
-                ],
-                'generationConfig' => [
-                    'responseMimeType' => 'application/json'
-                ]
-            ]);
+            $response = $this->callGeminiJson($apiKey, $prompt);
 
             if ($response->failed()) {
                 $errorMsg = $response->json('error.message') ?? 'Terjadi kesalahan pada server Gemini.';
@@ -118,6 +208,8 @@ PENTING: Anda harus mengembalikan respon dalam format JSON array yang valid tanp
             'section' => 'required|string|max:255',
             'topik' => 'nullable|string|max:1000',
             'metode' => 'nullable|string|max:255',
+            'fakultas' => 'nullable|string|max:255',
+            'prodi' => 'nullable|string|max:255',
             'section_title' => 'nullable|string|max:500',
             'bab_context' => 'nullable|string|max:255',
             'ai_write_style' => 'nullable|string|max:255',
@@ -138,6 +230,9 @@ PENTING: Anda harus mengembalikan respon dalam format JSON array yang valid tanp
         $section = $request->input('section');
         $topik = $request->input('topik') ?? 'Sesuai judul';
         $metode = $request->input('metode') ?? 'Metode kualitatif/kuantitatif standar';
+        $fakultas = $request->input('fakultas') ?? '';
+        $prodi = $request->input('prodi') ?? '';
+        $academicContext = $this->buildAcademicContext($fakultas, $prodi);
         $aiWriteStyle = $request->input('ai_write_style', 'structured');
         $yearStart = $request->input('year_start') ?? (date('Y') - 10);
         $yearEnd = $request->input('year_end') ?? date('Y');
@@ -146,20 +241,29 @@ PENTING: Anda harus mengembalikan respon dalam format JSON array yang valid tanp
         if ($section === '__dynamic__') {
             $sectionTitle = $request->input('section_title', 'Bagian ini');
             $babContext = $request->input('bab_context', 'BAB');
+            $dynamicSectionInstruction = $this->buildDynamicSectionInstruction($sectionTitle);
 
             $prompt = "Anda adalah penulis akademik skripsi Indonesia yang ahli dan dosen pembimbing senior. Tulis draf konten ilmiah yang sangat terfokus, mendalam, dan spesifik untuk bagian sub-bab berikut:
 
 Judul Skripsi: {$title}
+Fakultas/Prodi: {$fakultas} / {$prodi}
 Topik Penelitian: {$topik}
 Metode/Algoritma: {$metode}
 Konteks BAB: {$babContext}
 Judul Sub-Bab: {$sectionTitle}
 
+{$academicContext}
+
+{$dynamicSectionInstruction}
+
 Ketentuan Gaya & Penulisan:
 1. Tulis dalam bahasa Indonesia akademis yang sangat formal, ilmiah, mengalir, dan presisi (sesuai PUEBI/EYD).
-2. Tulis minimal 2-3 paragraf mendalam yang secara langsung membahas topik/judul sub-bab tersebut secara logis.
-3. JANGAN menulis ringkasan umum dari seluruh alur penelitian atau bab jika judul sub-bab merujuk ke aktivitas/proses spesifik (seperti 'Communication', 'Akuisisi Pengetahuan', 'Desain Antarmuka', dll.). Bahaslah secara terfokus mengenai detail pelaksanaan dan luaran sub-bab tersebut.
-4. Struktur penulisan sub-bab harus mencakup aspek berikut:
+2. Tulis konten yang secara langsung sesuai dengan Judul Sub-Bab '{$sectionTitle}', bukan judul sub-bab sebelumnya atau berikutnya.
+3. DILARANG memulai jawaban dengan nama sub-bab lain. Contoh: jika Judul Sub-Bab adalah 'Maksud dan Tujuan', jangan menulis 'Rumusan Masalah ...'.
+4. Tulis minimal 2-3 paragraf atau poin bernomor bila format sub-bab secara akademik lebih tepat memakai poin.
+5. JANGAN menulis ringkasan umum dari seluruh alur penelitian atau bab jika judul sub-bab merujuk ke aktivitas/proses spesifik (seperti 'Communication', 'Akuisisi Pengetahuan', 'Desain Antarmuka', dll.). Bahaslah secara terfokus mengenai detail pelaksanaan dan luaran sub-bab tersebut.
+6. DILARANG menyertakan heading seperti 'BAB I', 'PENDAHULUAN', '1.3 Rumusan Masalah', atau judul sub-bab apapun di dalam content. Isi hanya badan paragraf/poin untuk sub-bab target.
+7. Struktur penulisan sub-bab harus mencakup aspek berikut bila sesuai dengan jenis sub-bab:
    - Paragraf 1 (Definisi & Relevansi): Jelaskan apa itu [Judul Sub-Bab] dalam konteks metodologi/sistem yang dibangun. Hubungkan langsung dengan Judul Skripsi, Topik, dan Metode/Algoritma yang digunakan.
    - Paragraf 2 (Tujuan & Detail Proses): Terangkan secara konkret bagaimana proses atau tahapan tersebut dilakukan secara riil (misalnya jika tentang 'Communication' atau 'Akuisisi Pengetahuan', jelaskan komunikasi/wawancara dengan pakar/praktisi yang relevan seperti dokter/psikolog/ahli terkait topik skripsi, observasi lapangan, atau studi literatur).
    - Paragraf 3 (Hasil/Output & Dampak): Jelaskan output nyata/konkret yang didapatkan dari tahap ini (seperti identifikasi gejala Thalassemia, data latih Naive Bayes, penentuan batasan sistem, basis aturan, kebutuhan fungsional/non-fungsional, dll.) dan bagaimana hal tersebut menjadi landasan untuk tahap selanjutnya dalam sistem/penelitian.
@@ -167,7 +271,7 @@ Ketentuan Gaya & Penulisan:
 CONTOH ACUAN GAYA & STRUKTUR (untuk sub-bab 'Communication' pada skripsi Sistem Pakar Game Online):
 \"Communication merupakan tahapan awal yang fundamental dalam pengembangan sistem pakar untuk analisis skrining tingkat kecanduan game online menggunakan metode Certainty Factor. Tahap ini bertujuan untuk memperoleh pemahaman yang mendalam mengenai gejala kecanduan, tingkat kecanduan, serta proses penalaran yang digunakan oleh pakar dalam menentukan tingkat kecanduan. Proses communication dilakukan melalui wawancara dengan psikolog sebagai pakar serta didukung oleh observasi terhadap perilaku penggunaan game online pada remaja dan masyarakat umum. Hasil dari tahap ini digunakan untuk mengidentifikasi kebutuhan sistem, baik fungsional maupun non-fungsional, serta sebagai dasar dalam penyusunan basis pengetahuan berupa aturan if–then dan penentuan nilai Certainty Factor yang akan digunakan dalam proses inferensi sistem pakar.\"
 
-PENTING: Terapkan gaya, alur, dan struktur contoh di atas ke sub-bab '{$sectionTitle}' dengan menyesuaikannya secara logis dan ilmiah terhadap Judul Skripsi ('{$title}'), Topik ('{$topik}'), dan Metode ('{$metode}') Anda.
+PENTING: Terapkan gaya akademik ke sub-bab '{$sectionTitle}' dengan menyesuaikannya secara logis dan ilmiah terhadap Judul Skripsi ('{$title}'), Topik ('{$topik}'), dan Metode ('{$metode}') Anda. Abaikan contoh jika contoh tersebut tidak sesuai dengan jenis sub-bab target.
 Berikan LANGSUNG isi draf tulisan yang siap disalin tanpa teks sapaan pembuka (seperti 'Halo', 'Berikut adalah draf...') atau teks penutup. Tulis secara mendalam, rapi, dan ilmiah.";
         } else {
             // Build tailored background prompt if section is latar_belakang
@@ -301,6 +405,7 @@ Ketentuan: Tulis saran teoritis dan praktis bagi pembaca, universitas, atau pene
         ];
 
             $prompt = $sectionPrompts[$section] ?? "Tulis isi draf akademik formal dalam bahasa Indonesia untuk bagian {$section} skripsi dengan judul '{$title}'.";
+            $prompt = "{$academicContext}\n\nFakultas/Prodi: {$fakultas} / {$prodi}\n" . $prompt;
         
             $prompt .= "\n\nPENTING: Berikan LANGSUNG isi draf tulisan yang siap disalin tanpa teks sapaan pembuka (seperti 'Halo', 'Berikut adalah draf...') atau teks penutup. Tulis secara mendalam, rapi, dan ilmiah.";
         }
@@ -335,20 +440,7 @@ Pastikan respon Anda murni merupakan string JSON yang valid agar dapat diproses 
         $prompt .= $jsonInstruction;
 
         try {
-            $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}";
-            
-            $response = Http::post($url, [
-                'contents' => [
-                    [
-                        'parts' => [
-                            ['text' => $prompt]
-                        ]
-                    ]
-                ],
-                'generationConfig' => [
-                    'responseMimeType' => 'application/json'
-                ]
-            ]);
+            $response = $this->callGeminiJson($apiKey, $prompt);
 
             if ($response->failed()) {
                 $errorMsg = $response->json('error.message') ?? 'Terjadi kesalahan pada server Gemini.';
@@ -375,6 +467,7 @@ Pastikan respon Anda murni merupakan string JSON yang valid agar dapat diproses 
             $content = preg_replace('/\*([^*]+)\*/', '$1', $content);
             $content = preg_replace('/__([^_]+)__/', '$1', $content);
             $content = preg_replace('/_([^_]+)_/', '$1', $content);
+            $content = $this->cleanGeneratedSectionContent($content, $section === '__dynamic__' ? ($sectionTitle ?? '') : '');
             
             if ($table && isset($table['headers'])) {
                 $table['title'] = preg_replace('/\*\*([^*]+)\*\*/', '$1', $table['title'] ?? '');
@@ -400,6 +493,82 @@ Pastikan respon Anda murni merupakan string JSON yang valid agar dapat diproses 
 
         } catch (\Exception $e) {
             Log::error('Generate section error: ' . $e->getMessage());
+            return response()->json(['error' => 'Koneksi ke API Gemini gagal: ' . $e->getMessage()], 500);
+        }
+    }
+
+    public function aiChat(Request $request)
+    {
+        $request->validate([
+            'message' => 'required|string|max:1500',
+            'history' => 'nullable|array|max:10',
+            'history.*.role' => 'required_with:history|string|in:user,assistant',
+            'history.*.content' => 'required_with:history|string|max:1500',
+            'title' => 'nullable|string|max:1000',
+            'fakultas' => 'nullable|string|max:255',
+            'prodi' => 'nullable|string|max:255',
+            'topik' => 'nullable|string|max:1000',
+        ]);
+
+        $apiKey = $this->getApiKey($request);
+
+        if (!$apiKey) {
+            return response()->json(['error' => 'API Key Gemini tidak ditemukan. Harap masukkan API Key di panel pengaturan.'], 400);
+        }
+
+        $message = $request->input('message');
+        $title = $request->input('title', 'Belum ditentukan');
+        $fakultas = $request->input('fakultas', '');
+        $prodi = $request->input('prodi', '');
+        $topik = $request->input('topik', '');
+        $academicContext = $this->buildAcademicContext($fakultas, $prodi);
+        $historyText = collect($request->input('history', []))
+            ->take(-8)
+            ->map(fn ($item) => strtoupper($item['role']) . ': ' . $item['content'])
+            ->implode("\n");
+
+        $prompt = "Anda adalah AI Chat khusus untuk membantu mahasiswa menyusun laporan, skripsi, tugas akhir, KP, dan dokumen akademik.
+
+BATASAN WAJIB:
+1. Jangan menjawab topik di luar penyusunan laporan akademik. Jika pengguna bertanya di luar topik, tolak singkat dan arahkan kembali ke laporan.
+2. Jangan mengarang referensi, nama jurnal, kutipan, standar, atau aturan kampus yang tidak diberikan pengguna. Jika perlu referensi, sarankan pengguna memverifikasi ke pedoman kampus/dosen.
+3. Jawab ringkas, praktis, dan bisa langsung dipakai untuk menyusun laporan.
+4. Untuk Informatika/SI, pahami SDLC Waterfall/Agile/Prototype/Scrum, APSI, kebutuhan fungsional/non-fungsional, UML, BPMN, Use Case, Activity, Sequence, Class Diagram, ERD, database, dan pengujian.
+5. Untuk Teknik Sipil dan Industri, gunakan pendekatan akademik teknik yang relevan dan konservatif; jangan mengklaim berasal dari UI/UGM/UNPAD/ITB/ITS kecuali pengguna memberi dokumen spesifik.
+
+{$academicContext}
+
+Konteks dokumen:
+Judul: {$title}
+Fakultas/Prodi: {$fakultas} / {$prodi}
+Topik: {$topik}
+
+Riwayat percakapan terbaru:
+{$historyText}
+
+Pertanyaan pengguna:
+{$message}
+
+Kembalikan JSON valid: {\"content\":\"jawaban chat dalam bahasa Indonesia\"}";
+
+        try {
+            $response = $this->callGeminiJson($apiKey, $prompt);
+
+            if ($response->failed()) {
+                $errorMsg = $response->json('error.message') ?? 'Terjadi kesalahan pada server Gemini.';
+                return response()->json(['error' => $errorMsg], 500);
+            }
+
+            $resultText = $response->json('candidates.0.content.parts.0.text');
+            $data = json_decode($resultText, true);
+
+            if (json_last_error() !== JSON_ERROR_NONE || !isset($data['content'])) {
+                return response()->json(['error' => 'Gagal mengurai respon dari AI Chat. Silakan coba lagi.'], 500);
+            }
+
+            return response()->json(['content' => $data['content']]);
+        } catch (\Exception $e) {
+            Log::error('AI chat error: ' . $e->getMessage());
             return response()->json(['error' => 'Koneksi ke API Gemini gagal: ' . $e->getMessage()], 500);
         }
     }
@@ -740,20 +909,7 @@ PENTING: Anda harus mengembalikan respon dalam format JSON array yang valid tanp
 ]";
 
         try {
-            $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}";
-            
-            $response = Http::post($url, [
-                'contents' => [
-                    [
-                        'parts' => [
-                            ['text' => $prompt]
-                        ]
-                    ]
-                ],
-                'generationConfig' => [
-                    'responseMimeType' => 'application/json'
-                ]
-            ]);
+            $response = $this->callGeminiJson($apiKey, $prompt);
 
             if ($response->failed()) {
                 $errorMsg = $response->json('error.message') ?? 'Terjadi kesalahan pada server Gemini.';
@@ -822,9 +978,7 @@ Kembalikan hasilnya dalam format JSON dengan kunci-kunci berikut (abaikan markdo
 }
 Harap isi nilai-nilai di atas sesuai dengan panduan. Jika ada yang tidak disebutkan, isi dengan null. Jangan mengarang data.";
 
-                $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}";
-                
-                $response = Http::post($url, [
+                $response = $this->postGemini($apiKey, [
                     'contents' => [
                         [
                             'parts' => [
@@ -913,9 +1067,7 @@ Harap isi nilai-nilai di atas sesuai dengan panduan. Jika ada yang tidak disebut
                     "}\n" .
                     "Harap isi nilai-nilai di atas sesuai dengan panduan. Jika ada yang tidak disebutkan, isi dengan null. Jangan mengarang data.";
 
-                $url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={$apiKey}";
-                
-                $response = Http::post($url, [
+                $response = $this->postGemini($apiKey, [
                     'contents' => [
                         [
                             'parts' => [

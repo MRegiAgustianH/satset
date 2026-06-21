@@ -11,6 +11,7 @@ export default function AiPromptModal({
   onGenerateWithPrompt,
 }) {
   if (!show || !target) return null;
+  const isRevision = target.mode === 'revision';
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 no-print text-slate-100 p-4">
@@ -18,7 +19,7 @@ export default function AiPromptModal({
         <div className="flex justify-between items-center border-b border-slate-800 pb-3 mb-4">
           <h3 className="font-bold flex items-center gap-2 text-sm text-slate-200">
             <Sparkles className="h-5 w-5 text-indigo-500" />
-            Tulis Konten dengan AI
+            {isRevision ? 'Revisi Konten dengan AI' : 'Tulis Konten dengan AI'}
           </h3>
           <button
             onClick={onClose}
@@ -38,17 +39,17 @@ export default function AiPromptModal({
 
           <div>
             <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
-              Instruksi Tambahan (Opsional)
+              {isRevision ? 'Komentar Revisi Dosen' : 'Instruksi Tambahan (Opsional)'}
             </label>
             <textarea
               value={promptInput}
               onChange={(e) => onPromptInputChange(e.target.value)}
-              placeholder="Contoh: sertakan tabel perbandingan metode, tulis dalam 2 paragraf, gunakan nada akademis formal, dll."
+              placeholder={isRevision ? 'Contoh: latar belakang kurang fokus ke masalah utama, tambahkan gap penelitian dan perjelas objek penelitian.' : 'Contoh: sertakan tabel perbandingan metode, tulis dalam 2 paragraf, gunakan nada akademis formal, dll.'}
               rows={4}
               className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
             />
             <span className="block text-[9px] text-slate-500 mt-1 leading-normal">
-              *Jika Anda meminta tabel, AI akan otomatis menghasilkan data tabel dan menambahkannya sebagai bagian tabel dinamis baru tepat di bawah paragraf ini.
+              {isRevision ? '*Masukkan komentar dosen apa adanya. AI akan menulis ulang bagian ini sesuai revisi dan tetap menjaga urutan laporan.' : '*Jika Anda meminta tabel, AI akan otomatis menghasilkan data tabel dan menambahkannya sebagai bagian tabel dinamis baru tepat di bawah paragraf ini.'}
             </span>
           </div>
         </div>
@@ -58,14 +59,14 @@ export default function AiPromptModal({
             onClick={onGenerateDirect}
             className="px-4 py-2 border border-slate-800 hover:bg-slate-850 rounded-lg font-bold text-slate-350 hover:text-slate-200"
           >
-            Tulis Langsung
+            {isRevision ? 'Revisi Umum' : 'Tulis Langsung'}
           </button>
           <button
             onClick={onGenerateWithPrompt}
             className="bg-indigo-600 hover:bg-indigo-700 px-5 py-2 rounded-lg font-bold text-white flex items-center gap-1.5 shadow-md shadow-indigo-650/10"
           >
             <Sparkles className="h-3.5 w-3.5" />
-            Tulis dengan Prompt
+            {isRevision ? 'Revisi dari Komentar' : 'Tulis dengan Prompt'}
           </button>
         </div>
       </div>

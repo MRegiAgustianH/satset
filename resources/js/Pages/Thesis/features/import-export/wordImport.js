@@ -535,7 +535,7 @@ export const createWordImportHandler = (context) => {
       const newBabSections = createEmptyBabSections();
 
       let currentBabIndex = 0; // 0 = bab1, 1 = bab2... up to 4
-      const babKeys = ['bab1', 'bab2', 'bab3', 'bab4', 'bab5'];
+      const babKeys = ['bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'bab6'];
       
       let currentSectionId = null;
       let currentContent = [];
@@ -664,6 +664,7 @@ export const createWordImportHandler = (context) => {
       let inSistematikaSection = false;
       let pendingChapterTitleKey = null;
       let pendingBlock = null; // { section, kind } of a just-created figure/table to capture a trailing caption
+      let pendingCaption = null; // caption that appears before the related block (common for tables)
 
       Array.from(tempDiv.childNodes).forEach(node => {
         if (node.nodeType !== Node.ELEMENT_NODE) return;
@@ -710,7 +711,8 @@ export const createWordImportHandler = (context) => {
         const lowerText = textContent.toLowerCase();
         const standaloneCaption = parseCaptionText(textContent);
         if (standaloneCaption && (tagName === 'p' || tagName === 'h1' || tagName === 'h2' || tagName === 'h3')) {
-          attachCaptionToNearestBlock(standaloneCaption);
+          const attached = attachCaptionToNearestBlock(standaloneCaption);
+          if (!attached) pendingCaption = standaloneCaption;
           return;
         }
 
@@ -1003,11 +1005,12 @@ export const createWordImportHandler = (context) => {
             const eqSection = {
               id: 'import_eq_' + Date.now() + Math.random(),
               type: 'equation',
-              title: title || 'Rumus',
+              title: (pendingCaption?.kind === 'equation' && pendingCaption.text) || title || 'Rumus',
               content: formula || 'y = f(x)',
               description: description,
               page: 1
             };
+            if (pendingCaption?.kind === 'equation') pendingCaption = null;
             newBabSections[bKey].push(eqSection);
             pendingBlock = { section: eqSection, kind: 'equation' };
           } else {
@@ -1016,12 +1019,13 @@ export const createWordImportHandler = (context) => {
             const tabSection = {
               id: 'import_tab_' + Date.now() + Math.random(),
               type: 'table',
-              title: caption || 'Tabel',
+              title: (pendingCaption?.kind === 'table' && pendingCaption.text) || caption || 'Tabel',
               page: 1,
               headers: parsed.headers,
               rows: parsed.rows,
               rowsText: parsed.rows.map(r => r.join(', ')).join('\n')
             };
+            if (pendingCaption?.kind === 'table') pendingCaption = null;
             newBabSections[bKey].push(tabSection);
             pendingBlock = { section: tabSection, kind: 'table' };
           }
@@ -1036,10 +1040,11 @@ export const createWordImportHandler = (context) => {
           const figSection = {
             id: 'import_fig_' + Date.now() + Math.random(),
             type: 'figure',
-            title: caption || 'Gambar',
+            title: (pendingCaption?.kind === 'figure' && pendingCaption.text) || caption || 'Gambar',
             page: 1,
             imageData: imgEl && imgEl.getAttribute('src') ? imgEl.getAttribute('src') : null
           };
+          if (pendingCaption?.kind === 'figure') pendingCaption = null;
           newBabSections[bKey].push(figSection);
           pendingBlock = { section: figSection, kind: 'figure' };
           startContinuationSection(bKey);

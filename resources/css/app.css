@@ -120,11 +120,16 @@
 /* Perfect Dot Leader for Print and Web */
 .dot-leader {
   flex: 1;
-  background-image: radial-gradient(circle, #000 1px, transparent 1.5px);
-  background-position: bottom;
-  background-size: 1ex 2px;
-  background-repeat: repeat-x;
-  margin-bottom: 4px; /* Align to text baseline */
+  min-width: 1cm;
+  overflow: hidden;
+  white-space: nowrap;
+  line-height: 1;
+  transform: translateY(-0.08em);
+}
+
+.dot-leader::before {
+  content: "................................................................................................................................................................................................................................................................................................................................................................";
+  letter-spacing: 0.06em;
 }
 
 /* Print Specific Optimizations */
@@ -168,6 +173,21 @@
     color: #000000 !important;
   }
 
+  .document-print-width,
+  .document-print-transform,
+  .document-print-stack {
+    width: 21cm !important;
+    max-width: none !important;
+    min-width: 21cm !important;
+    height: auto !important;
+    transform: none !important;
+    transition: none !important;
+    display: block !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    gap: 0 !important;
+  }
+
   .no-print, .no-print-custom {
     display: none !important;
   }
@@ -178,13 +198,27 @@
   }
 
   .a4-page {
+    width: 21cm !important;
+    min-width: 21cm !important;
+    max-width: 21cm !important;
+    height: 29.7cm !important;
+    min-height: 29.7cm !important;
+    max-height: 29.7cm !important;
     box-shadow: none !important;
     margin: 0 !important;
     border: none !important;
+    break-after: page;
     page-break-after: always;
     display: block !important;
     position: relative !important;
     background-color: #ffffff !important;
+    overflow: hidden !important;
+  }
+
+  .a4-page.no-print-custom {
+    display: none !important;
+    break-after: auto !important;
+    page-break-after: auto !important;
   }
   
   /* Disable dashed borders inside the editor when printing */
@@ -194,7 +228,8 @@
   
   /* Disable browser default headers and footers (URL, Date, Page Number) */
   @page {
-    margin: 0 !important;
+    size: A4 portrait;
+    margin: 0;
   }
 
   /* Remove transform scale during print */

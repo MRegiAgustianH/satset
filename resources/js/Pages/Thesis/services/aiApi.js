@@ -54,3 +54,10 @@ export const generateSectionRequest = (apiKey, payload) => fetch('/thesis/genera
   credentials: 'same-origin',
   body: JSON.stringify(payload),
 });
+
+export const aiChatRequest = (apiKey, payload) => fetch('/thesis/ai-chat', {
+  method: 'POST',
+  headers: geminiHeaders(apiKey),
+  credentials: 'same-origin',
+  body: JSON.stringify(payload),
+});

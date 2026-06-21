@@ -35,9 +35,10 @@ export function buildCoverWordHtml({ coverElements = [], cleanFontFamily = 'Time
     }
 
     if (element.type === 'logo') {
+      const logoSize = escapeWordHtml(element.size || '5cm');
       const logoHtml = element.logoType === 'custom' && element.logoData
-        ? `<img src="${escapeWordHtml(element.logoData)}" width="208" style="width:5.5cm; max-height:5.5cm;" />`
-        : `<div style="width:5.5cm; height:5.5cm; margin:0 auto; border:1px solid #999; text-align:center; line-height:5.5cm; font-family:${cleanFontFamily}; font-size:10pt;">LOGO</div>`;
+        ? `<img src="${escapeWordHtml(element.logoData)}" style="width:${logoSize}; max-height:${logoSize};" />`
+        : `<div style="width:${logoSize}; height:${logoSize}; margin:0 auto; border:1px solid #999; text-align:center; line-height:${logoSize}; font-family:${cleanFontFamily}; font-size:10pt;">LOGO</div>`;
 
       return `<div style="width:100%; text-align:center; margin:6pt 0; text-indent:0cm;">${logoHtml}</div>`;
     }

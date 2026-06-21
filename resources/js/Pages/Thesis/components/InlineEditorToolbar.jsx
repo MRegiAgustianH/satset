@@ -131,6 +131,7 @@ export default function InlineEditorToolbar({
         >
           <option value="none">Tanpa Nomor</option>
           <option value="bab_prefix_dot">Bertingkat sesuai heading (1.1)</option>
+          <option value="bab_roman_prefix_dot">Bertingkat Romawi BAB (I.1 / II.1)</option>
           <option value="bab_prefix_double_dot">Bertingkat sesuai heading (1.1.1 / 1.1.1.1)</option>
           <option value="arabic_dot">1. 2. 3.</option>
           <option value="arabic_paren">1) 2) 3)</option>

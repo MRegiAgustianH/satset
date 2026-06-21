@@ -13,39 +13,68 @@ export const cleanLineBreaks = (text) => {
 };
 
 export const splitParagraphText = (text, linesFit, widthPx, layout, isList) => {
-  const words = text.split(/\s+/);
-  const charWidth = getFontSizePx(layout.fontSize || '12pt') * 0.46;
-  const textWidthPx = isList ? (widthPx - 32) : widthPx;
+  const sourceLines = String(text || '').split('\n');
+  const charWidth = getFontSizePx(layout.fontSize || '12pt') * 0.425;
+  const textWidthPx = isList ? (widthPx - 42) : widthPx;
   const textIndentPx = (!isList && layout.paragraphIndent === 'indented') ? 47 : 0;
 
   let currentLineIdx = 0;
-  let currentLineWidth = 0;
   let part1Words = [];
   let part2Words = [];
-  let currentLineWidthLimit = Math.max(1, textWidthPx - textIndentPx);
+  let part1Lines = [];
+  let part2Lines = [];
+  let targetPart = 1;
 
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i];
-    const wordWidth = Math.max(charWidth, word.length * charWidth);
-    const spaceWidth = currentLineWidth === 0 ? 0 : charWidth;
+  sourceLines.forEach((line, lineIndex) => {
+    const words = line.split(/\s+/).filter(Boolean);
+    let currentLineWidth = 0;
+    let currentLineWidthLimit = Math.max(1, textWidthPx - textIndentPx);
+    const linePart1 = [];
+    const linePart2 = [];
 
-    if (currentLineWidth > 0 && currentLineWidth + spaceWidth + wordWidth > currentLineWidthLimit) {
+    if (words.length === 0) {
+      if (currentLineIdx < linesFit && targetPart === 1) {
+        part1Lines.push('');
+      } else {
+        part2Lines.push('');
+      }
       currentLineIdx++;
-      currentLineWidth = 0;
-      currentLineWidthLimit = Math.max(1, textWidthPx);
+      return;
     }
 
-    if (currentLineIdx < linesFit) {
-      part1Words.push(word);
+    words.forEach((word) => {
+      const wordWidth = Math.max(charWidth, word.length * charWidth);
+      const spaceWidth = currentLineWidth === 0 ? 0 : charWidth;
+
+      if (currentLineWidth > 0 && currentLineWidth + spaceWidth + wordWidth > currentLineWidthLimit) {
+        currentLineIdx++;
+        currentLineWidth = 0;
+        currentLineWidthLimit = Math.max(1, textWidthPx);
+      }
+
+      if (currentLineIdx < linesFit && targetPart === 1) {
+        linePart1.push(word);
+        part1Words.push(word);
+      } else {
+        targetPart = 2;
+        linePart2.push(word);
+        part2Words.push(word);
+      }
+
       currentLineWidth += (currentLineWidth === 0 ? 0 : charWidth) + wordWidth;
-    } else {
-      part2Words.push(word);
-    }
-  }
+    });
+
+    if (linePart1.length > 0) part1Lines.push(linePart1.join(' '));
+    if (linePart2.length > 0) part2Lines.push(linePart2.join(' '));
+    if (lineIndex < sourceLines.length - 1 && targetPart === 1) currentLineIdx++;
+  });
+
+  const part1 = part1Lines.join('\n').trim() || part1Words.join(' ');
+  const part2 = part2Lines.join('\n').trim() || part2Words.join(' ');
 
   return {
-    part1: part1Words.join(' '),
-    part2: part2Words.join(' '),
+    part1,
+    part2,
   };
 };
 import { getFontSizePx } from '../features/document-preview/pagination';

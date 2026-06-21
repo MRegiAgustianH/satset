@@ -3,6 +3,7 @@ import {
   estimateParagraphHeight,
   estimateParagraphLines,
   getContentWidthPx,
+  getFontSizePx,
   getLineHeightPx,
   getLayoutNumber,
 } from './pagination';
@@ -19,6 +20,7 @@ const PAGE_WIDTH_CM = 21;
 const PAGE_HEIGHT_CM = 29.7;
 const DEFAULT_FIGURE_WIDTH_CM = 12;
 const DEFAULT_FIGURE_HEIGHT_CM = 8;
+const PAGE_BOTTOM_SAFETY_PX = 26;
 
 const getFigureAspectRatio = (figure) => {
   const storedRatio = parseFloat(figure.imgAspectRatio);
@@ -55,6 +57,34 @@ const getParagraphAlignment = (section, paragraphIndex) => (
   section.paragraphAlignments?.[paragraphIndex] || section.textAlign || null
 );
 
+const getCellText = (cell) => {
+  if (cell == null) return '';
+  if (typeof cell === 'object') return String(cell.text ?? cell.value ?? '');
+  return String(cell);
+};
+
+const estimateTableRowHeight = (cells, layout, widthPx, columnCount) => {
+  const safeColumnCount = Math.max(1, columnCount || cells.length || 1);
+  const cellWidthPx = Math.max(36, (widthPx / safeColumnCount) + 10);
+  const lineHeightPx = Math.max(10, getFontSizePx(layout.fontSize || '12pt') * getLayoutNumber(layout.tableLineSpacing, 1) * 0.72);
+  const maxLines = Math.max(
+    1,
+    ...cells.map((cell) => estimateParagraphLines(getCellText(cell), cellWidthPx, layout, true))
+  );
+  return (maxLines * lineHeightPx) + 4;
+};
+
+const estimateTableHeight = (el, layout) => {
+  const widthPx = getContentWidthPx(layout);
+  const headers = Array.isArray(el.headers) ? el.headers : String(el.headers || '').split(',').map(text => text.trim()).filter(Boolean);
+  const rows = Array.isArray(el.rows) ? el.rows : [];
+  const columnCount = Math.max(headers.length, ...rows.map(row => Array.isArray(row) ? row.length : 1), 1);
+  const captionHeight = 16;
+  const headerHeight = estimateTableRowHeight(headers, layout, widthPx, columnCount);
+  const bodyHeight = rows.reduce((total, row) => total + estimateTableRowHeight(Array.isArray(row) ? row : [row], layout, widthPx, columnCount), 0);
+  return captionHeight + headerHeight + bodyHeight + 4;
+};
+
 const estimateElementHeight = (el, layout) => {
   const widthPx = getContentWidthPx(layout);
   const lineGapPx = getLineHeightPx(layout);
@@ -72,10 +102,7 @@ const estimateElementHeight = (el, layout) => {
   }
 
   if (el.type === 'table') {
-    const rowsCount = el.rows ? el.rows.length : 0;
-    const tableLineSpacing = getLayoutNumber(layout.tableLineSpacing, 1);
-    const rowHeight = 20 + Math.round(tableLineSpacing * 10);
-    return 25 + 35 + (rowsCount * rowHeight) + 40;
+    return estimateTableHeight(el, layout);
   }
 
   if (el.type === 'figure') {
@@ -179,14 +206,19 @@ export const buildBabPagesMap = ({ sections, layout, inlineEditingBlockId }) => 
   const map = {};
   const maxPageHeight = (
     PAGE_HEIGHT_CM - (getLayoutNumber(layout.marginTop, 4) + getLayoutNumber(layout.marginBottom, 3))
-  ) * CM_TO_PX - 4;
+  ) * CM_TO_PX - PAGE_BOTTOM_SAFETY_PX;
 
-  ['bab1', 'bab2', 'bab3', 'bab4', 'bab5'].forEach((babKey) => {
+  ['bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'bab6'].forEach((babKey) => {
     const subElements = buildBabSubElements(babKey, sections[babKey] || []);
     const pages = [];
     let currentPage = [];
-    let currentHeight = 120;
+    const firstPageTopReserve = 80;
+    let currentHeight = firstPageTopReserve;
     let elIdx = 0;
+
+    const resetPageHeight = () => {
+      currentHeight = pages.length === 0 ? firstPageTopReserve : 0;
+    };
 
     while (elIdx < subElements.length) {
       const el = subElements[elIdx];
@@ -195,7 +227,7 @@ export const buildBabPagesMap = ({ sections, layout, inlineEditingBlockId }) => 
         if (currentPage.length > 0) {
           pages.push(currentPage);
           currentPage = [];
-          currentHeight = 0;
+          resetPageHeight();
         }
         elIdx++;
         continue;
@@ -205,39 +237,51 @@ export const buildBabPagesMap = ({ sections, layout, inlineEditingBlockId }) => 
 
       if (el.type === 'table') {
         const isFirstPageOfTable = !el.isContinuation;
-        const tableLineSpacing = getLayoutNumber(layout.tableLineSpacing, 1);
-        const rowHeight = 20 + Math.round(tableLineSpacing * 10);
-        const hFresh = (isFirstPageOfTable ? 25 : 0) + 35 + (el.rows.length * rowHeight) + 40;
+        const headers = Array.isArray(el.headers) ? el.headers : String(el.headers || '').split(',').map(text => text.trim()).filter(Boolean);
+        const rows = Array.isArray(el.rows) ? el.rows : [];
+        const columnCount = Math.max(headers.length, ...rows.map(row => Array.isArray(row) ? row.length : 1), 1);
+        const widthPx = getContentWidthPx(layout);
+        const captionHeight = isFirstPageOfTable ? 16 : 0;
+        const headerHeight = estimateTableRowHeight(headers, layout, widthPx, columnCount);
+        const rowHeights = rows.map(row => estimateTableRowHeight(Array.isArray(row) ? row : [row], layout, widthPx, columnCount));
+        const tableTailHeight = el.isContinuation ? 0 : 4;
+        const hFresh = captionHeight + headerHeight + rowHeights.reduce((sum, rowHeight) => sum + rowHeight, 0) + tableTailHeight;
 
         if (currentHeight + h > maxPageHeight) {
           if (hFresh <= maxPageHeight && currentPage.length > 0) {
             pages.push(currentPage);
             currentPage = [];
-            currentHeight = 0;
+            resetPageHeight();
             continue;
           }
 
           const availableHeight = maxPageHeight - currentHeight;
-          const minH = (isFirstPageOfTable ? 25 : 0) + 35 + rowHeight + 40;
+          const minH = captionHeight + headerHeight + Math.min(...rowHeights, 24) + tableTailHeight;
 
           if (availableHeight >= minH) {
-            const k = Math.floor((availableHeight - (isFirstPageOfTable ? 25 : 0) - 75) / rowHeight);
-            const rowsFit = Math.max(1, k);
+            let usedHeight = captionHeight + headerHeight + tableTailHeight;
+            let rowsFit = 0;
+            for (let rowIndex = 0; rowIndex < rowHeights.length; rowIndex++) {
+              if (usedHeight + rowHeights[rowIndex] > availableHeight) break;
+              usedHeight += rowHeights[rowIndex];
+              rowsFit++;
+            }
+            rowsFit = Math.max(1, rowsFit);
 
-            if (rowsFit < el.rows.length) {
-              const elPart1 = { ...el, rows: el.rows.slice(0, rowsFit) };
+            if (rowsFit < rows.length) {
+              const elPart1 = { ...el, rows: rows.slice(0, rowsFit) };
               const continuationTitle = el.title.endsWith(' (Lanjutan)') ? el.title : `${el.title} (Lanjutan)`;
               const elPart2 = {
                 ...el,
                 title: continuationTitle,
-                rows: el.rows.slice(rowsFit),
+                rows: rows.slice(rowsFit),
                 isContinuation: true,
               };
 
               currentPage.push(elPart1);
               pages.push(currentPage);
               currentPage = [];
-              currentHeight = 0;
+              resetPageHeight();
               subElements.splice(elIdx + 1, 0, elPart2);
               elIdx++;
               continue;
@@ -245,7 +289,7 @@ export const buildBabPagesMap = ({ sections, layout, inlineEditingBlockId }) => 
           } else if (currentPage.length > 0) {
             pages.push(currentPage);
             currentPage = [];
-            currentHeight = 0;
+            resetPageHeight();
             continue;
           }
         }
@@ -270,7 +314,7 @@ export const buildBabPagesMap = ({ sections, layout, inlineEditingBlockId }) => 
             currentPage.push({ ...el, text: part1 });
             pages.push(currentPage);
             currentPage = [];
-            currentHeight = 0;
+            resetPageHeight();
             subElements.splice(elIdx + 1, 0, { ...el, text: part2, noIndent: true, isListContinuation: isList });
             elIdx++;
             continue;
@@ -293,7 +337,7 @@ export const buildBabPagesMap = ({ sections, layout, inlineEditingBlockId }) => 
               currentPage.push({ ...el, text: part1 });
               pages.push(currentPage);
               currentPage = [];
-              currentHeight = 0;
+              resetPageHeight();
               subElements.splice(elIdx + 1, 0, { ...el, text: part2, noIndent: true, isListContinuation: isList });
               elIdx++;
               continue;

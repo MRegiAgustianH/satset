@@ -45,7 +45,8 @@ export const getDefaultNumberingStyleForHeading = (level) => {
 
 const isHierarchicalBabStyle = (style) => (
   style === 'bab_prefix_dot' ||
-  style === 'bab_prefix_double_dot'
+  style === 'bab_prefix_double_dot' ||
+  style === 'bab_roman_prefix_dot'
 );
 
 const resetDeeperHeadingCounters = (headingCounters, level) => {
@@ -96,7 +97,9 @@ export const resolveBlockNumberingForBab = (babKey, sections) => {
     if (isHierarchicalBabStyle(style) && headingLevel >= 2) {
       headingCounters[headingLevel] = (headingCounters[headingLevel] || 0) + 1;
       resetDeeperHeadingCounters(headingCounters, headingLevel);
-      prefix = buildHierarchicalPrefix(babNum, headingCounters, headingLevel);
+      prefix = style === 'bab_roman_prefix_dot'
+        ? buildHierarchicalPrefix(convertToRoman(babNum), headingCounters, headingLevel)
+        : buildHierarchicalPrefix(babNum, headingCounters, headingLevel);
     } else if (style === 'arabic_dot') {
       arabicDotVal++;
       prefix = `${arabicDotVal}. `;

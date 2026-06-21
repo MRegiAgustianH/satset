@@ -14,5 +14,6 @@ export const SECTION_GROUPS = [
   { id: 'bab3', name: 'BAB III METODOLOGI PENELITIAN' },
   { id: 'bab4', name: 'BAB IV HASIL DAN PEMBAHASAN' },
   { id: 'bab5', name: 'BAB V PENUTUP' },
+  { id: 'bab6', name: 'BAB VI KESIMPULAN DAN SARAN' },
   { id: 'daftar-pustaka', name: 'Daftar Pustaka' },
 ];

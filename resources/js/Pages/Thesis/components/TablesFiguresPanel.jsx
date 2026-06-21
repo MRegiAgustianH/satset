@@ -10,6 +10,9 @@ export default function TablesFiguresPanel({
   editingElementData,
   tables,
   figures,
+  getAutoCaption,
+  getAutoCaptionPrefix,
+  stripCaptionNumberPrefix,
   onTableInputChange,
   onFigureInputChange,
   onEditingElementIdChange,
@@ -32,13 +35,23 @@ export default function TablesFiguresPanel({
         </h4>
         <div>
           <label className="text-[9px] text-slate-400 block mb-0.5">Judul Tabel (Caption)</label>
-          <input
-            type="text"
-            value={tableInput.title}
-            onChange={(event) => onTableInputChange((prev) => ({ ...prev, title: event.target.value }))}
-            placeholder="Contoh: Tabel 3.1 Profil Kuesioner"
-            className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
-          />
+          <div className="flex overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950">
+            <span className="shrink-0 border-r border-slate-200 dark:border-slate-800 bg-indigo-600/10 px-2 py-1.5 text-[10px] font-bold text-indigo-500 dark:text-indigo-300">
+              {getAutoCaptionPrefix ? getAutoCaptionPrefix('table', tableInput.bab, 'new_table') : 'Tabel'}
+            </span>
+            <input
+              type="text"
+              value={stripCaptionNumberPrefix ? stripCaptionNumberPrefix(tableInput.title, 'table') : tableInput.title}
+              onChange={(event) => onTableInputChange((prev) => ({ ...prev, title: event.target.value }))}
+              placeholder="Judul tabel tanpa nomor"
+              className="min-w-0 flex-1 bg-transparent p-1.5 text-xs outline-none"
+            />
+          </div>
+          {getAutoCaption && (
+            <p className="mt-1 text-[9px] text-slate-500 dark:text-slate-400">
+              Preview: {getAutoCaption('table', tableInput.bab, 'new_table', tableInput.title)}
+            </p>
+          )}
         </div>
         <div className="grid grid-cols-2 gap-2">
           <div>
@@ -119,15 +132,25 @@ export default function TablesFiguresPanel({
           <div key={tableItem.id} className="p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl flex flex-col gap-2 text-[10px]">
             {editingElementId === tableItem.id ? (
               <div className="space-y-2">
-                <div>
-                  <label className="text-[8px] text-slate-400 block mb-0.5">Judul Tabel (Caption)</label>
-                  <input
-                    type="text"
-                    value={editingElementData.title}
-                    onChange={(event) => onEditingElementDataChange((prev) => ({ ...prev, title: event.target.value }))}
-                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
-                  />
-                </div>
+                  <div>
+                    <label className="text-[8px] text-slate-400 block mb-0.5">Judul Tabel (Caption)</label>
+                    <div className="flex overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
+                      <span className="shrink-0 border-r border-slate-200 dark:border-slate-800 bg-indigo-600/10 px-2 py-1.5 text-[10px] font-bold text-indigo-500 dark:text-indigo-300">
+                        {getAutoCaptionPrefix ? getAutoCaptionPrefix('table', editingElementData.bab, editingElementId) : 'Tabel'}
+                      </span>
+                      <input
+                        type="text"
+                        value={stripCaptionNumberPrefix ? stripCaptionNumberPrefix(editingElementData.title, 'table') : editingElementData.title}
+                        onChange={(event) => onEditingElementDataChange((prev) => ({ ...prev, title: event.target.value }))}
+                        className="min-w-0 flex-1 bg-transparent p-1.5 text-xs outline-none"
+                      />
+                    </div>
+                    {getAutoCaption && (
+                      <p className="mt-1 text-[9px] text-slate-500 dark:text-slate-400">
+                        Preview: {getAutoCaption('table', editingElementData.bab, editingElementId, editingElementData.title)}
+                      </p>
+                    )}
+                  </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="text-[8px] text-slate-400 block mb-0.5">Letak Bab</label>

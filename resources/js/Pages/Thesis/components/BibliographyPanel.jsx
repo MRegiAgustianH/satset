@@ -1,5 +1,5 @@
 import React from 'react';
-import { ExternalLink, Loader2, Plus, Search, Trash2 } from 'lucide-react';
+import { ClipboardPaste, ExternalLink, Loader2, Plus, ScanSearch, Search, Trash2, Wand2 } from 'lucide-react';
 
 export default function BibliographyPanel({
   show,
@@ -9,6 +9,8 @@ export default function BibliographyPanel({
   scholarYearEnd,
   scholarResults,
   refInput,
+  manualReferencesText,
+  detectedCitations,
   references,
   refStyle,
   onScholarQueryChange,
@@ -17,7 +19,11 @@ export default function BibliographyPanel({
   onScholarSearch,
   onImportCitation,
   onRefInputChange,
+  onManualReferencesTextChange,
   onAddReference,
+  onImportManualReferences,
+  onDetectCitations,
+  onGenerateReferencesFromDetectedCitations,
   onRefStyleChange,
   onReferencesChange,
 }) {
@@ -95,6 +101,69 @@ export default function BibliographyPanel({
             ))}
           </div>
         )}
+      </div>
+
+      <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-3">
+        <h3 className="font-bold text-slate-400 uppercase text-[10px] flex items-center gap-1">
+          <ClipboardPaste className="h-3.5 w-3.5 text-indigo-500" />
+          Paste Daftar Pustaka Manual
+        </h3>
+        <textarea
+          value={manualReferencesText}
+          onChange={(event) => onManualReferencesTextChange(event.target.value)}
+          rows={5}
+          placeholder={'Paste satu referensi per baris. Contoh:\nSugiyono. (2018). Metode Penelitian Kuantitatif, Kualitatif, dan R&D. Alfabeta, Bandung.\nPratama, A. (2022). Analisis Kepuasan Pengguna E-Learning. Jurnal Teknologi Informasi, 10(2), 145-156.'}
+          className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-2 text-xs text-slate-800 dark:text-slate-100 resize-y"
+        />
+        <button
+          type="button"
+          onClick={onImportManualReferences}
+          className="w-full bg-indigo-600 hover:bg-indigo-700 py-1.5 text-white font-bold rounded-lg flex items-center justify-center gap-1"
+        >
+          <Plus className="h-4 w-4" />
+          Tambahkan dari Paste
+        </button>
+        <p className="text-[9px] text-slate-500 dark:text-slate-400 leading-relaxed">
+          Parser membaca pola umum APA: Penulis. (Tahun). Judul. Penerbit/Jurnal. Data yang kurang lengkap tetap bisa diedit manual setelah masuk daftar.
+        </p>
+      </div>
+
+      <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-3">
+        <h3 className="font-bold text-slate-400 uppercase text-[10px] flex items-center gap-1">
+          <ScanSearch className="h-3.5 w-3.5 text-indigo-500" />
+          Auto Detect Sitasi Paragraf
+        </h3>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={onDetectCitations}
+            className="border border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-500 dark:text-indigo-300 py-1.5 rounded-lg font-bold flex items-center justify-center gap-1"
+          >
+            <ScanSearch className="h-3.5 w-3.5" />
+            Deteksi Sitasi
+          </button>
+          <button
+            type="button"
+            onClick={onGenerateReferencesFromDetectedCitations}
+            className="border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-300 py-1.5 rounded-lg font-bold flex items-center justify-center gap-1"
+          >
+            <Wand2 className="h-3.5 w-3.5" />
+            Buat Pustaka
+          </button>
+        </div>
+        {detectedCitations.length > 0 && (
+          <div className="max-h-28 overflow-y-auto space-y-1 pr-1">
+            {detectedCitations.map((citation) => (
+              <div key={`${citation.author}-${citation.year}`} className="flex justify-between gap-2 text-[10px] bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded px-2 py-1">
+                <span className="truncate">{citation.author}</span>
+                <span className="font-bold text-indigo-500">{citation.year}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="text-[9px] text-slate-500 dark:text-slate-400 leading-relaxed">
+          Deteksi mendukung pola seperti <b>(Sugiyono, 2018)</b> dan <b>Sugiyono (2018)</b>. Jika referensi lengkap belum ada, sistem membuat placeholder untuk dilengkapi.
+        </p>
       </div>
 
       <form onSubmit={onAddReference} className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-3">

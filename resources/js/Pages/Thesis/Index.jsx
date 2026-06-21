@@ -3,7 +3,7 @@ import { Head } from '@inertiajs/react';
 import {
   GraduationCap, Moon, Sun, Sliders, FileText, BookOpen, Sparkles,
   Loader2, Plus, Trash2, Search, Table, Image as ImageIcon,
-  Compass, RotateCcw, Wand2,
+  Compass, MessageCircle, RotateCcw, Wand2,
   PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 import { SECTION_GROUPS } from './constants/sectionGroups';
@@ -19,8 +19,18 @@ import { createWordImportHandler } from './features/import-export/wordImport';
 import { downloadHtmlAsDocx } from './features/import-export/docxExport';
 import { buildCoverWordHtml, buildTableWordHtml as buildWordTableHtml } from './features/import-export/wordHtmlBuilders';
 import {
+  DEFAULT_EXPORT_SECTION_IDS,
+  executePrintPdf,
+  executeSplitPrintPdf,
+  getPagePrintClass as resolvePagePrintClass,
+  getSectionsToExport,
+  resolveSelectedPageIds,
+} from './features/import-export/printExport';
+import { useAiAssistant } from './features/ai-assistant/useAiAssistant';
+import {
   buildBabPagesMap,
   convertToAlpha,
+  convertToRoman,
   getDefaultNumberingStyleForHeading,
   paginateListEntries,
   resolveBlockNumberingForBab,
@@ -48,6 +58,7 @@ import DraftManager from './components/DraftManager';
 import NewDraftChooser from './components/NewDraftChooser';
 import DraftListModal from './components/DraftListModal';
 import TablesFiguresPanel from './components/TablesFiguresPanel';
+import CoverPage from './components/CoverPage';
 import AiAssistantPanel from './components/AiAssistantPanel';
 import BibliographyPanel from './components/BibliographyPanel';
 import SidebarFooter from './components/SidebarFooter';
@@ -298,25 +309,25 @@ export default function Index() {
   const [babTitles, setBabTitles] = useState({
     bab1: { prefix: "BAB I", title: "PENDAHULUAN" },
     bab2: { prefix: "BAB II", title: "TINJAUAN PUSTAKA" },
-    bab3: { prefix: "BAB III", title: "METODOLOGI PENELITIAN" },
-    bab4: { prefix: "BAB IV", title: "HASIL DAN PEMBAHASAN" },
-    bab5: { prefix: "BAB V", title: "KESIMPULAN DAN SARAN" }
+    bab3: { prefix: "BAB III", title: "ANALISIS DAN PERANCANGAN" },
+    bab4: { prefix: "BAB IV", title: "IMPLEMENTASI DAN PENGUJIAN" },
+    bab5: { prefix: "BAB V", title: "PENUTUP" }
   });
   const [showWelcomeModal, setShowWelcomeModal] = useState(true);
   const [hasLocalDraft, setHasLocalDraft] = useState(false);
   const [showOutlineBuilder, setShowOutlineBuilder] = useState(false);
-  const [outlineText, setOutlineText] = useState('BAB I PENDAHULUAN\n  Latar Belakang\n  Rumusan Masalah\n  Tujuan Penelitian\nBAB II TINJAUAN PUSTAKA\n  Landasan Teori\n  Penelitian Terdahulu\nBAB III METODOLOGI PENELITIAN\n  Metode Penelitian\n  Teknik Pengumpulan Data');
+  const [outlineText, setOutlineText] = useState('BAB I PENDAHULUAN\n  Latar Belakang\n  Rumusan Masalah\n  Maksud dan Tujuan Penelitian\n  Manfaat Penelitian\n  Batasan Masalah\n  Metode Penelitian\n  Sistematika Penulisan\nBAB II TINJAUAN PUSTAKA/LANDASAN TEORI\n  Landasan Teori\n  Penelitian Terdahulu\nBAB III ANALISIS DAN PERANCANGAN\n  Analisis Sistem\n  Perancangan Sistem\nBAB IV IMPLEMENTASI DAN PENGUJIAN\n  Implementasi Sistem\n  Pengujian Sistem\nBAB V PENUTUP\n  Kesimpulan\n  Saran');
   
   // Thesis Layout Config
   const [layout, setLayout] = useState({
-    preset: 'dikti',
+    preset: 'informatika',
     marginTop: 4.0,
     marginLeft: 4.0,
     marginBottom: 3.0,
     marginRight: 3.0,
     fontFamily: "'Times New Roman', Times, serif",
     fontSize: '12pt',
-    lineSpacing: '2.0',
+    lineSpacing: '1.5',
     textAlign: 'justify',
     tableLineSpacing: '1.0',
     tableTextAlign: 'left',
@@ -325,24 +336,25 @@ export default function Index() {
     romanPrelims: true,
     paragraphIndent: 'indented', // 'indented' or 'flush'
     coverAuthorLabel: 'Oleh :',
-    showPersetujuan: false,
-    showPengesahan: false,
-    showPernyataan: false,
-    showAbstractIndo: false,
-    showAbstractEng: false,
-    showDaftarRumus: true
+    showPersetujuan: true,
+    showPengesahan: true,
+    showPernyataan: true,
+    showAbstractIndo: true,
+    showAbstractEng: true,
+    showDaftarRumus: false
   });
 
   // Cover Page Fields — kept for backward compatibility (used by persetujuan/pengesahan pages)
+
   const [cover, setCover] = useState({
-    title: 'ANALISIS PENGARUH PENGGUNAAN PLATFORM E-LEARNING TERHADAP KEPUASAN DAN MOTIVASI BELAJAR MAHASISWA TEKNOLOGI INFORMASI',
-    subtitle: 'SKRIPSI',
-    author: 'BUDI SANTOSO',
-    nim: '1204220054',
-    prodi: 'Sistem Informasi',
-    fakultas: 'Fakultas Teknologi Informasi & Industri',
-    univ: 'Universitas Indonesia Raya',
-    city: 'Jakarta',
+    title: 'JUDUL PENELITIAN TUGAS AKHIR MAHASISWA',
+    subtitle: 'TUGAS AKHIR',
+    author: 'Nama Mahasiswa',
+    nim: 'NPM Mahasiswa',
+    prodi: 'Teknik Informatika',
+    fakultas: 'Fakultas Teknik',
+    univ: 'Universitas Suryakancana',
+    city: 'Cianjur',
     year: '2026',
     logoType: 'default',
     logoData: null
@@ -353,20 +365,25 @@ export default function Index() {
   //        'logo' (gambar logo), 'spacing' (spasi kosong)
   // Each element syncs relevant fields to `cover` for backward compat.
   const defaultCoverElements = [
-    { id: 'ce1', type: 'title', value: 'ANALISIS PENGARUH PENGGUNAAN PLATFORM E-LEARNING TERHADAP KEPUASAN DAN MOTIVASI BELAJAR MAHASISWA TEKNOLOGI INFORMASI', fontSize: '14pt', bold: true, uppercase: true, field: 'title' },
-    { id: 'ce_sp1', type: 'spacing', height: '1.5cm' },
-    { id: 'ce2', type: 'label', value: 'SKRIPSI', fontSize: '12pt', bold: true, uppercase: true, field: 'subtitle' },
-    { id: 'ce_sp2', type: 'spacing', height: '1.5cm' },
-    { id: 'ce3', type: 'logo', logoType: 'default', logoData: null },
-    { id: 'ce_sp3', type: 'spacing', height: '1.5cm' },
-    { id: 'ce4', type: 'label', value: 'Disusun Oleh :', fontSize: '12pt', bold: false, uppercase: false, field: '' },
-    { id: 'ce5', type: 'text', value: 'BUDI SANTOSO', fontSize: '12pt', bold: true, uppercase: true, underline: true, field: 'author' },
-    { id: 'ce6', type: 'text', value: '1204220054', fontSize: '12pt', bold: true, uppercase: false, underline: false, field: 'nim' },
-    { id: 'ce7', type: 'spacing', height: '2cm' },
-    { id: 'ce8', type: 'text', value: 'PROGRAM STUDI SISTEM INFORMASI', fontSize: '12pt', bold: true, uppercase: true, field: 'prodi' },
-    { id: 'ce9', type: 'text', value: 'FAKULTAS TEKNOLOGI INFORMASI & INDUSTRI', fontSize: '12pt', bold: true, uppercase: true, field: 'fakultas' },
-    { id: 'ce10', type: 'text', value: 'UNIVERSITAS INDONESIA RAYA', fontSize: '12pt', bold: true, uppercase: true, field: 'univ' },
-    { id: 'ce11', type: 'text', value: 'JAKARTA, 2026', fontSize: '12pt', bold: true, uppercase: true, field: 'city_year' },
+    { id: 'ce1', type: 'title', value: 'JUDUL PENELITIAN TUGAS AKHIR MAHASISWA', fontSize: '12pt', bold: true, uppercase: true, field: 'title' },
+    { id: 'ce_sp1', type: 'spacing', height: '1.55cm' },
+    { id: 'ce2', type: 'label', value: 'TUGAS AKHIR', fontSize: '12pt', bold: true, uppercase: true, field: 'subtitle' },
+    { id: 'ce_sp2', type: 'spacing', height: '1.55cm' },
+    { id: 'ce3', type: 'text', value: 'Diajukan sebagai Salah Satu Syarat Kelulusan Program Studi Sarjana Strata-1 (S1)', fontSize: '10pt', bold: true, uppercase: false, field: '' },
+    { id: 'ce4', type: 'text', value: 'Program Studi Teknik Informatika Fakultas Teknik Universitas Suryakancana', fontSize: '10pt', bold: true, uppercase: false, field: '' },
+    { id: 'ce_sp3', type: 'spacing', height: '1.45cm' },
+    { id: 'ce5', type: 'label', value: 'Oleh', fontSize: '10pt', bold: true, uppercase: false, field: '' },
+    { id: 'ce_sp4', type: 'spacing', height: '0.35cm' },
+    { id: 'ce6', type: 'text', value: 'Nama Mahasiswa', fontSize: '10pt', bold: true, uppercase: false, underline: false, field: 'author' },
+    { id: 'ce7', type: 'text', value: 'NPM Mahasiswa', fontSize: '10pt', bold: true, uppercase: false, underline: false, field: 'nim' },
+    { id: 'ce_sp5', type: 'spacing', height: '1.35cm' },
+    { id: 'ce8', type: 'logo', logoType: 'default', logoData: null, size: '5cm' },
+    { id: 'ce_sp6', type: 'spacing', height: '1.1cm' },
+    { id: 'ce9', type: 'text', value: 'PROGRAM STUDI TEKNIK INFORMATIKA', fontSize: '12pt', bold: true, uppercase: true, field: 'prodi' },
+    { id: 'ce10', type: 'text', value: 'FAKULTAS TEKNIK', fontSize: '12pt', bold: true, uppercase: true, field: 'fakultas' },
+    { id: 'ce11', type: 'text', value: 'UNIVERSITAS SURYAKANCANA', fontSize: '12pt', bold: true, uppercase: true, field: 'univ' },
+    { id: 'ce12', type: 'text', value: 'CIANJUR', fontSize: '12pt', bold: true, uppercase: true, field: 'city' },
+    { id: 'ce13', type: 'text', value: '2026', fontSize: '12pt', bold: true, uppercase: true, field: 'year' },
   ];
   const [coverElements, setCoverElements] = useState(defaultCoverElements);
 
@@ -385,22 +402,23 @@ export default function Index() {
       { id: 'b2s4', type: 'text', headingLevel: 2, title: 'Applied / Micro Theory', content: 'Applied Theory yang digunakan mencakup instrumen kepuasan pengguna e-learning serta parameter motivasi intrinsik (Self-Determination Theory). Teori terapan ini digunakan secara operasional untuk menyusun kuesioner dan menganalisis korelasi data empiris mahasiswa.', page: 2, numberingStyle: 'bab_prefix_dot' }
     ],
     bab3: [
-      { id: 'b3s1', type: 'text', headingLevel: 2, title: 'Desain / Pendekatan Penelitian', content: 'Penelitian ini menggunakan pendekatan kuantitatif deskriptif dengan metode survei kausalitas. Pendekatan ini bertujuan untuk menguji hipotesis mengenai pengaruh variabel independen (kualitas sistem) terhadap variabel dependen (motivasi belajar) melalui variabel mediasi (kepuasan pengguna).', page: 1, numberingStyle: 'bab_prefix_dot' },
-      { id: 'b3s2', type: 'text', headingLevel: 2, title: 'Tempat dan Waktu Penelitian', content: 'Penelitian dilakukan di lingkungan Fakultas Teknologi Informasi & Industri, Universitas Indonesia Raya. Waktu pengumpulan data dilaksanakan pada semester genap tahun akademik 2025/2026, yang berlangsung mulai dari bulan Maret hingga Mei 2026.', page: 1, numberingStyle: 'bab_prefix_dot' },
+      { id: 'b3s1', type: 'text', headingLevel: 2, title: 'Analisis Sistem', content: 'Penelitian ini menggunakan pendekatan kuantitatif deskriptif dengan metode survei kausalitas. Pendekatan ini bertujuan untuk menguji hipotesis mengenai pengaruh variabel independen (kualitas sistem) terhadap variabel dependen (motivasi belajar) melalui variabel mediasi (kepuasan pengguna).', page: 1, numberingStyle: 'bab_prefix_dot' },
+      { id: 'b3s2', type: 'text', headingLevel: 2, title: 'Perancangan Sistem', content: 'Penelitian dilakukan di lingkungan Fakultas Teknologi Informasi & Industri, Universitas Indonesia Raya. Waktu pengumpulan data dilaksanakan pada semester genap tahun akademik 2025/2026, yang berlangsung mulai dari bulan Maret hingga Mei 2026.', page: 1, numberingStyle: 'bab_prefix_dot' },
       { id: 'fig2', type: 'figure', title: 'Gambar 3.1 Model Struktural Pengukuran Variabel (Inner Model)', page: 1, imageData: null },
-      { id: 'b3s3', type: 'text', headingLevel: 2, title: 'Metode Pengumpulan Data', content: 'Pengumpulan data dilakukan secara daring menggunakan Google Form dengan skala Likert 1-5. Sampel diambil menggunakan teknik purposive sampling dengan jumlah responden sebanyak 150 mahasiswa aktif yang menggunakan e-learning minimal selama satu semester.', page: 2, numberingStyle: 'bab_prefix_dot' },
-      { id: 'b3s4', type: 'text', headingLevel: 2, title: 'Metode Analisis Data', content: 'Data yang terkumpul dianalisis menggunakan metode Structural Equation Modeling (SEM) berbasis Partial Least Squares (PLS) dengan bantuan perangkat lunak SmartPLS versi 4.0. Tahapan analisis meliputi pengujian outer model (validitas dan reliabilitas) serta inner model (uji hipotesis).', page: 2, numberingStyle: 'bab_prefix_dot' },
+      { id: 'b3s3', type: 'text', headingLevel: 2, title: 'Algoritma dan Metode', content: 'Pengumpulan data dilakukan secara daring menggunakan Google Form dengan skala Likert 1-5. Sampel diambil menggunakan teknik purposive sampling dengan jumlah responden sebanyak 150 mahasiswa aktif yang menggunakan e-learning minimal selama satu semester.', page: 2, numberingStyle: 'bab_prefix_dot' },
+      { id: 'b3s4', type: 'text', headingLevel: 2, title: 'Perancangan Basis Data dan Antarmuka', content: 'Data yang terkumpul dianalisis menggunakan metode Structural Equation Modeling (SEM) berbasis Partial Least Squares (PLS) dengan bantuan perangkat lunak SmartPLS versi 4.0. Tahapan analisis meliputi pengujian outer model (validitas dan reliabilitas) serta inner model (uji hipotesis).', page: 2, numberingStyle: 'bab_prefix_dot' },
       { id: 'tab1', type: 'table', title: 'Tabel 3.1 Jadwal Pelaksanaan Kegiatan Penelitian', page: 2, headers: 'No, Nama Kegiatan, Bulan 1, Bulan 2, Bulan 3', rows: [['1', 'Persiapan & Studi Literatur', '✓', '', ''], ['2', 'Pengumpulan Data Responden', '', '✓', ''], ['3', 'Analisis Data PLS-SEM', '', '', '✓']], rowsText: '1, Persiapan & Studi Literatur, ✓, , \n2, Pengumpulan Data Responden, , ✓, \n3, Analisis Data PLS-SEM, , , ✓' }
     ],
     bab4: [
-      { id: 'b4s1', type: 'text', headingLevel: 2, title: 'Deskripsi dan Analisis Data', content: 'Berdasarkan hasil pengumpulan data, diperoleh total 150 kuesioner responden yang valid dan layak dianalisis. Pengujian model pengukuran (outer model) menunjukkan seluruh butir pertanyaan memiliki nilai outer loading > 0.70 dan nilai Average Variance Extracted (AVE) > 0.50. Uji reliabilitas menunjukkan nilai Composite Reliability (CR) > 0.80 untuk seluruh variabel. Hasil pengujian model struktural (inner model) membuktikan kualitas sistem berpengaruh signifikan terhadap kepuasan mahasiswa dengan nilai p-value sebesar 0.012 (< 0.05).', page: 1, numberingStyle: 'bab_prefix_dot' },
-      { id: 'b4s2', type: 'text', headingLevel: 2, title: 'Pembahasan Hasil Penelitian', content: 'Hasil penelitian membuktikan bahwa kemudahan navigasi dan kecepatan respon pada platform e-learning membuat mahasiswa merasa nyaman belajar, yang pada gilirannya meningkatkan kepuasan mereka. Ketika kepuasan tersebut tercapai, mahasiswa terbukti memiliki dorongan internal (motivasi intrinsik) yang lebih kuat untuk mengeksplorasi materi perkuliahan secara mandiri.', page: 2, numberingStyle: 'bab_prefix_dot' },
+      { id: 'b4s1', type: 'text', headingLevel: 2, title: 'Implementasi Sistem', content: 'Berdasarkan hasil pengumpulan data, diperoleh total 150 kuesioner responden yang valid dan layak dianalisis. Pengujian model pengukuran (outer model) menunjukkan seluruh butir pertanyaan memiliki nilai outer loading > 0.70 dan nilai Average Variance Extracted (AVE) > 0.50. Uji reliabilitas menunjukkan nilai Composite Reliability (CR) > 0.80 untuk seluruh variabel. Hasil pengujian model struktural (inner model) membuktikan kualitas sistem berpengaruh signifikan terhadap kepuasan mahasiswa dengan nilai p-value sebesar 0.012 (< 0.05).', page: 1, numberingStyle: 'bab_prefix_dot' },
+      { id: 'b4s2', type: 'text', headingLevel: 2, title: 'Pengujian Sistem', content: 'Hasil penelitian membuktikan bahwa kemudahan navigasi dan kecepatan respon pada platform e-learning membuat mahasiswa merasa nyaman belajar, yang pada gilirannya meningkatkan kepuasan mereka. Ketika kepuasan tersebut tercapai, mahasiswa terbukti memiliki dorongan internal (motivasi intrinsik) yang lebih kuat untuk mengeksplorasi materi perkuliahan secara mandiri.', page: 2, numberingStyle: 'bab_prefix_dot' },
       { id: 'tab2', type: 'table', title: 'Tabel 4.1 Hasil Pengujian Akurasi Kualitas Informasi', page: 2, headers: 'No, Parameter Uji, Target (%), Hasil (%), Status', rows: [['1', 'Keandalan Sistem', '90.0', '94.5', 'LULUS'], ['2', 'Kecepatan Respon', '85.0', '89.2', 'LULUS']], rowsText: '1, Keandalan Sistem, 90.0, 94.5, LULUS\n2, Kecepatan Respon, 85.0, 89.2, LULUS' }
     ],
     bab5: [
-      { id: 'b5s1', type: 'text', headingLevel: 2, title: 'Kesimpulan Penelitian', content: 'Berdasarkan hasil penelitian dan pembahasan yang telah dilakukan, ditarik kesimpulan sebagai berikut:\n1. Kualitas sistem platform e-learning berpengaruh positif dan signifikan secara langsung terhadap tingkat kepuasan belajar mahasiswa.\n2. Kepuasan penggunaan e-learning terbukti menjadi mediator yang kuat dalam meningkatkan motivasi belajar mahasiswa secara berkelanjutan.', page: 1, numberingStyle: 'bab_prefix_dot' },
+      { id: 'b5s1', type: 'text', headingLevel: 2, title: 'Kesimpulan', content: 'Berdasarkan hasil penelitian dan pembahasan yang telah dilakukan, ditarik kesimpulan sebagai berikut:\n1. Kualitas sistem platform e-learning berpengaruh positif dan signifikan secara langsung terhadap tingkat kepuasan belajar mahasiswa.\n2. Kepuasan penggunaan e-learning terbukti menjadi mediator yang kuat dalam meningkatkan motivasi belajar mahasiswa secara berkelanjutan.', page: 1, numberingStyle: 'bab_prefix_dot' },
       { id: 'b5s2', type: 'text', headingLevel: 2, title: 'Saran', content: 'Berdasarkan kesimpulan di atas, diajukan saran sebagai berikut:\n1. Pihak universitas perlu meningkatkan performa server dan memperbarui desain antarmuka e-learning agar lebih modern dan interaktif.\n2. Dosen disarankan untuk menyajikan materi perkuliahan dalam bentuk multimedia interaktif guna mengurangi kejenuhan mahasiswa.', page: 2, numberingStyle: 'bab_prefix_dot' }
-    ]
+    ],
+    bab6: []
   });
 
   const [editingElementId, setEditingElementId] = useState(null);
@@ -647,17 +665,17 @@ export default function Index() {
         { id: 'b2s4', type: 'text', headingLevel: 2, title: 'Applied / Micro Theory', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
       ],
       bab3: [
-        { id: 'b3s1', type: 'text', headingLevel: 2, title: 'Desain / Pendekatan Penelitian', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
-        { id: 'b3s2', type: 'text', headingLevel: 2, title: 'Tempat dan Waktu Penelitian', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
-        { id: 'b3s3', type: 'text', headingLevel: 2, title: 'Metode Pengumpulan Data', content: '', page: 2, numberingStyle: 'bab_prefix_dot' },
-        { id: 'b3s4', type: 'text', headingLevel: 2, title: 'Metode Analisis Data', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
+        { id: 'b3s1', type: 'text', headingLevel: 2, title: 'Analisis Sistem', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b3s2', type: 'text', headingLevel: 2, title: 'Perancangan Sistem', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b3s3', type: 'text', headingLevel: 2, title: 'Algoritma dan Metode', content: '', page: 2, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b3s4', type: 'text', headingLevel: 2, title: 'Perancangan Basis Data dan Antarmuka', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
       ],
       bab4: [
-        { id: 'b4s1', type: 'text', headingLevel: 2, title: 'Deskripsi dan Analisis Data', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
-        { id: 'b4s2', type: 'text', headingLevel: 2, title: 'Pembahasan Hasil Penelitian', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
+        { id: 'b4s1', type: 'text', headingLevel: 2, title: 'Implementasi Sistem', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b4s2', type: 'text', headingLevel: 2, title: 'Pengujian Sistem', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
       ],
       bab5: [
-        { id: 'b5s1', type: 'text', headingLevel: 2, title: 'Kesimpulan Penelitian', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b5s1', type: 'text', headingLevel: 2, title: 'Kesimpulan', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
         { id: 'b5s2', type: 'text', headingLevel: 2, title: 'Saran', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
       ]
     };
@@ -1044,7 +1062,7 @@ export default function Index() {
           title: 'Sub-Bab Baru',
           content: '',
           page: 1,
-          numberingStyle: 'bab_prefix_dot'
+          numberingStyle: layout.preset === 'industri' ? 'bab_roman_prefix_dot' : 'bab_prefix_dot'
         };
       }
       
@@ -1059,6 +1077,9 @@ export default function Index() {
       return updated;
     });
   };
+
+
+
 
   const updateSectionContentById = (babKey, sectionId, newContent) => {
     setBabSections(prev => {
@@ -1208,6 +1229,24 @@ export default function Index() {
     return "";
   };
 
+  const hasRenderableBabContent = (babKey) => {
+    const sections = babSections[babKey] || [];
+    return sections.some((section) => {
+      if (!section) return false;
+      if (section.type === 'text') return Boolean((section.content || '').trim());
+      if (section.type === 'table') return Boolean(section.rows?.length || section.rowsText || section.title);
+      if (section.type === 'figure') return Boolean(section.imageData || section.title);
+      if (section.type === 'equation') return Boolean(section.content || section.title);
+      return true;
+    });
+  };
+
+  const getRenderableBabKeys = () => ['bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'bab6'].filter((babKey) => {
+    if (!babTitles[babKey]) return false;
+    if (babKey === 'bab6') return hasRenderableBabContent(babKey);
+    return true;
+  });
+
   const renderBabDynamicPageContent = (babKey, pageIdx) => {
     const babPagesMap = getBabPagesMap();
     const pageElements = (babPagesMap[babKey] && babPagesMap[babKey][pageIdx]) || [];
@@ -1337,6 +1376,7 @@ export default function Index() {
             const paragraphIndentStyle = getSectionParagraphStyle(el);
             const listMatch = el.text.match(/^([0-9a-zA-Z]+[\.\)])\s+(.*)$/);
             if (listMatch) {
+              const isAlphaSubPoint = /^[a-z][\.)]$/.test(listMatch[1]);
               return (
                 <div 
                   key={idx} 
@@ -1345,7 +1385,7 @@ export default function Index() {
                     textIndent: 0,
                     marginBottom: 0,
                     textAlign: paragraphAlign,
-                    marginLeft: paragraphIndentStyle.marginLeft,
+                    marginLeft: `calc(${paragraphIndentStyle.marginLeft} + ${isAlphaSubPoint ? '0.65cm' : '0cm'})`,
                     marginRight: paragraphIndentStyle.marginRight,
                   }}
                   onClick={(e) => {
@@ -1354,7 +1394,7 @@ export default function Index() {
                   }}
                   title="Klik untuk edit langsung"
                 >
-                  <span className="w-8 shrink-0 font-bold text-slate-800">{listMatch[1]}</span>
+                  <span className={`${isAlphaSubPoint ? 'w-6' : 'w-8'} shrink-0 font-bold text-slate-800`}>{listMatch[1]}</span>
                   <span className="flex-1 min-w-0 text-slate-900" style={{ textAlign: paragraphAlign }} dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(listMatch[2]) }} />
                   <span className="absolute -top-3 right-1 bg-indigo-600 text-white text-[8px] font-bold px-1 rounded opacity-0 group-hover:opacity-100 transition-opacity no-print">Klik untuk edit</span>
                 </div>
@@ -1413,6 +1453,7 @@ export default function Index() {
             const normRows = normalizeTableRows(el.rows);
             const headersMask = computeMaskedHeaders(normHeaders);
             const rowsMask = computeMaskedCells(normRows);
+            const tableCaption = getAutoCaption('table', babKey, el.blockId, el.title);
 
             return (
               <div
@@ -1433,7 +1474,7 @@ export default function Index() {
                     fontFamily: 'var(--doc-font-family)',
                     fontSize: 'var(--doc-font-size, 12pt)'
                   }}
-                  dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(el.title || 'Tabel') }} 
+                  dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(tableCaption) }} 
                 />
                 <table 
                   className="academic-table w-full border-collapse border border-black"
@@ -1498,6 +1539,7 @@ export default function Index() {
           }
           if (el.type === 'figure') {
             const figW = el.imgWidth || 12;
+            const figureCaption = getAutoCaption('figure', babKey, el.blockId, el.title);
             return (
               <div
                 key={idx}
@@ -1524,7 +1566,7 @@ export default function Index() {
                   <div className="w-[12cm] h-[4cm] border border-slate-350 bg-slate-50 flex items-center justify-center rounded text-slate-400 font-mono text-[9pt] p-4 text-center relative overflow-hidden group">
                     <div className="flex flex-col items-center gap-1">
                       <ImageIcon className="h-8 w-8 text-slate-300" />
-                      <span>[Skema / Diagram Model - {el.title}]</span>
+                      <span>[Skema / Diagram Model - {figureCaption}]</span>
                     </div>
                     <label className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white cursor-pointer transition-opacity text-xs font-sans no-print">
                       Unggah Gambar
@@ -1544,13 +1586,14 @@ export default function Index() {
                     fontFamily: 'var(--doc-font-family)',
                     fontSize: 'var(--doc-font-size, 12pt)'
                   }}
-                  dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(el.title || 'Gambar') }} 
+                  dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(figureCaption) }} 
                 />
               </div>
             );
           }
           if (el.type === 'equation') {
             const descLines = el.description ? el.description.split('\n').filter(l => l.trim()) : [];
+            const equationCaption = getAutoCaption('equation', babKey, el.blockId, el.title);
             const resolvedEqPrefix = (() => {
               const babMatch = babKey.match(/\d+/);
               const babNum = babMatch ? babMatch[0] : '1';
@@ -1567,7 +1610,7 @@ export default function Index() {
                     fontFamily: 'var(--doc-font-family)',
                     fontSize: 'var(--doc-font-size, 12pt)'
                   }}
-                  dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(el.title || 'Rumus') }} 
+                  dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(equationCaption) }} 
                 />
                 
                 <div 
@@ -1635,15 +1678,26 @@ export default function Index() {
     const isGenerating = generatingSection === id;
     
     return (
-      <button 
-        type="button"
-        disabled={!!generatingSection}
-        onClick={() => triggerAIGenerateFlow({ babKey, id, displayTitle, legacyKey })} 
-        className="bg-indigo-600/10 hover:bg-indigo-650/20 text-indigo-500 dark:text-indigo-400 px-2 py-1.5 rounded-lg flex items-center gap-1 font-bold text-[9px] w-full justify-center disabled:opacity-40"
-      >
-        {isGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
-        AI Tulis
-      </button>
+      <div className="grid grid-cols-2 gap-1">
+        <button 
+          type="button"
+          disabled={!!generatingSection}
+          onClick={() => triggerAIGenerateFlow({ babKey, id, displayTitle, legacyKey })} 
+          className="bg-indigo-600/10 hover:bg-indigo-650/20 text-indigo-500 dark:text-indigo-400 px-2 py-1.5 rounded-lg flex items-center gap-1 font-bold text-[9px] w-full justify-center disabled:opacity-40"
+        >
+          {isGenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+          AI Tulis
+        </button>
+        <button
+          type="button"
+          disabled={!!generatingSection}
+          onClick={() => triggerAIGenerateFlow({ babKey, id, displayTitle, legacyKey, mode: 'revision' })}
+          className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 px-2 py-1.5 rounded-lg flex items-center gap-1 font-bold text-[9px] w-full justify-center disabled:opacity-40"
+        >
+          <Wand2 className="h-3 w-3" />
+          AI Revisi
+        </button>
+      </div>
     );
   };
 
@@ -1741,26 +1795,26 @@ export default function Index() {
         { id: 'b2s4', type: 'text', headingLevel: 2, title: 'Applied / Micro Theory', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
       ],
       bab3: [
-        { id: 'b3s1', type: 'text', headingLevel: 2, title: 'Desain / Pendekatan Penelitian', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
-        { id: 'b3s2', type: 'text', headingLevel: 2, title: 'Tempat dan Waktu Penelitian', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
-        { id: 'b3s3', type: 'text', headingLevel: 2, title: 'Metode Pengumpulan Data', content: '', page: 2, numberingStyle: 'bab_prefix_dot' },
-        { id: 'b3s4', type: 'text', headingLevel: 2, title: 'Metode Analisis Data', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
+        { id: 'b3s1', type: 'text', headingLevel: 2, title: 'Analisis Sistem', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b3s2', type: 'text', headingLevel: 2, title: 'Perancangan Sistem', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b3s3', type: 'text', headingLevel: 2, title: 'Algoritma dan Metode', content: '', page: 2, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b3s4', type: 'text', headingLevel: 2, title: 'Perancangan Basis Data dan Antarmuka', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
       ],
       bab4: [
-        { id: 'b4s1', type: 'text', headingLevel: 2, title: 'Deskripsi dan Analisis Data', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
-        { id: 'b4s2', type: 'text', headingLevel: 2, title: 'Pembahasan Hasil Penelitian', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
+        { id: 'b4s1', type: 'text', headingLevel: 2, title: 'Implementasi Sistem', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b4s2', type: 'text', headingLevel: 2, title: 'Pengujian Sistem', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
       ],
       bab5: [
-        { id: 'b5s1', type: 'text', headingLevel: 2, title: 'Kesimpulan Penelitian', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
+        { id: 'b5s1', type: 'text', headingLevel: 2, title: 'Kesimpulan', content: '', page: 1, numberingStyle: 'bab_prefix_dot' },
         { id: 'b5s2', type: 'text', headingLevel: 2, title: 'Saran', content: '', page: 2, numberingStyle: 'bab_prefix_dot' }
       ]
     };
     const defaultBabTitles = {
       bab1: { prefix: "BAB I", title: "PENDAHULUAN" },
-      bab2: { prefix: "BAB II", title: "TINJAUAN PUSTAKA" },
-      bab3: { prefix: "BAB III", title: "METODOLOGI PENELITIAN" },
-      bab4: { prefix: "BAB IV", title: "HASIL DAN PEMBAHASAN" },
-      bab5: { prefix: "BAB V", title: "KESIMPULAN DAN SARAN" }
+      bab2: { prefix: "BAB II", title: "TINJAUAN PUSTAKA/LANDASAN TEORI" },
+      bab3: { prefix: "BAB III", title: "ANALISIS DAN PERANCANGAN" },
+      bab4: { prefix: "BAB IV", title: "IMPLEMENTASI DAN PENGUJIAN" },
+      bab5: { prefix: "BAB V", title: "PENUTUP" }
     };
     setBabSections(blankBabSections);
     setBabTitles(defaultBabTitles);
@@ -1885,7 +1939,7 @@ export default function Index() {
       bab1: [
         { id: 'blank_' + Date.now(), type: 'text', headingLevel: 0, title: '', content: '', page: 1, numberingStyle: 'none' }
       ],
-      bab2: [], bab3: [], bab4: [], bab5: []
+      bab2: [], bab3: [], bab4: [], bab5: [], bab6: []
     };
     const babTitlesBlank = {
       bab1: { prefix: '', title: '' },
@@ -1941,9 +1995,9 @@ export default function Index() {
       return;
     }
 
-    const romans = ['I', 'II', 'III', 'IV', 'V'];
-    const babKeys = ['bab1', 'bab2', 'bab3', 'bab4', 'bab5'];
-    const babSectionsOut = { bab1: [], bab2: [], bab3: [], bab4: [], bab5: [] };
+    const romans = ['I', 'II', 'III', 'IV', 'V', 'VI'];
+    const babKeys = ['bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'bab6'];
+    const babSectionsOut = { bab1: [], bab2: [], bab3: [], bab4: [], bab5: [], bab6: [] };
     const babTitlesOut = {
       bab1: { prefix: '', title: '' },
       bab2: { prefix: '', title: '' },
@@ -2023,26 +2077,8 @@ export default function Index() {
 
   // Input states for reference form & Google Scholar finder
   const [refInput, setRefInput] = useState({ author: '', year: '', type: 'book', title: '', publisher: '' });
-  const [scholarQuery, setScholarQuery] = useState('');
-  const [scholarResults, setScholarResults] = useState([]);
-  const [searchingScholar, setSearchingScholar] = useState(false);
-
-  // Gemini API key state
-  const [apiKey, setApiKey] = useState(() => {
-    try {
-      return localStorage.getItem('gemini_api_key') || '';
-    } catch (e) {
-      return '';
-    }
-  });
-  
-  // AI Suggestions inputs
-  const [aiInputs, setAiInputs] = useState({ fakultas: 'Teknologi Informasi', prodi: 'Sistem Informasi', topik: 'Platform Pembelajaran E-Learning' });
-  const [suggestedTitles, setSuggestedTitles] = useState([]);
-  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
-  
-  // AI content draft generator state
-  const [generatingSection, setGeneratingSection] = useState(null);
+  const [manualReferencesText, setManualReferencesText] = useState('');
+  const [detectedCitations, setDetectedCitations] = useState([]);
   const [backgroundStyle, setBackgroundStyle] = useState('structured');
   const [scholarYearStart, setScholarYearStart] = useState(() => new Date().getFullYear() - 10);
   const [scholarYearEnd, setScholarYearEnd] = useState(() => new Date().getFullYear());
@@ -2113,7 +2149,7 @@ export default function Index() {
   const [headingStyles, setHeadingStyles] = useState({
     h1: { fontSize: '14pt', fontWeight: 'bold', fontStyle: 'normal', textAlign: 'center', uppercase: true },
     h2: { fontSize: '12pt', fontWeight: 'bold', fontStyle: 'normal', textAlign: 'left', uppercase: false },
-    h3: { fontSize: '12pt', fontWeight: 'bold', fontStyle: 'italic', textAlign: 'left', uppercase: false },
+    h3: { fontSize: '12pt', fontWeight: 'bold', fontStyle: 'normal', textAlign: 'left', uppercase: false },
     h4: { fontSize: '11pt', fontWeight: 'bold', fontStyle: 'normal', textAlign: 'left', uppercase: false },
     h5: { fontSize: '11pt', fontWeight: 'normal', fontStyle: 'italic', textAlign: 'left', uppercase: false },
     h6: { fontSize: '10pt', fontWeight: 'normal', fontStyle: 'italic', textAlign: 'left', uppercase: false },
@@ -2129,18 +2165,12 @@ export default function Index() {
   const [showNewDraftChooser, setShowNewDraftChooser] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [draftSearch, setDraftSearch] = useState('');
-  const [showAiPromptModal, setShowAiPromptModal] = useState(false);
-  const [aiPromptInput, setAiPromptInput] = useState('');
-  const [aiPromptTarget, setAiPromptTarget] = useState(null);
 
   // Download Modal settings
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [downloadFormat, setDownloadFormat] = useState('pdf'); // 'pdf' or 'docx'
   const [downloadRange, setDownloadRange] = useState('all'); // 'all' or 'custom'
-  const [selectedDownloadSections, setSelectedDownloadSections] = useState([
-    'cover', 'persetujuan', 'pengesahan', 'pernyataan', 'abstrak-indo', 'abstrak-eng',
-    'daftar-isi', 'daftar-tabel', 'daftar-gambar', 'daftar-rumus', 'bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'daftar-pustaka'
-  ]);
+  const [selectedDownloadSections, setSelectedDownloadSections] = useState(DEFAULT_EXPORT_SECTION_IDS);
   const [downloadSplit, setDownloadSplit] = useState(false); // split by chapter/heading 1
   const [pagesToPrint, setPagesToPrint] = useState(null); // dynamic print page filter
   
@@ -2150,10 +2180,10 @@ export default function Index() {
   // Helper to extract tables and figures from babSections dynamically
   const getAllTables = (sections = babSections) => {
     const list = [];
-    ['bab1', 'bab2', 'bab3', 'bab4', 'bab5'].forEach(babKey => {
+    ['bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'bab6'].forEach(babKey => {
       (sections[babKey] || []).forEach(sec => {
         if (sec.type === 'table') {
-          list.push({ ...sec, bab: babKey });
+          list.push({ ...sec, title: getAutoCaption('table', babKey, sec.id, sec.title, sections), bab: babKey });
         }
       });
     });
@@ -2162,10 +2192,10 @@ export default function Index() {
 
   const getAllFigures = (sections = babSections) => {
     const list = [];
-    ['bab1', 'bab2', 'bab3', 'bab4', 'bab5'].forEach(babKey => {
+    ['bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'bab6'].forEach(babKey => {
       (sections[babKey] || []).forEach(sec => {
         if (sec.type === 'figure') {
-          list.push({ ...sec, bab: babKey });
+          list.push({ ...sec, title: getAutoCaption('figure', babKey, sec.id, sec.title, sections), bab: babKey });
         }
       });
     });
@@ -2174,14 +2204,55 @@ export default function Index() {
 
   const getAllEquations = (sections = babSections) => {
     const list = [];
-    ['bab1', 'bab2', 'bab3', 'bab4', 'bab5'].forEach(babKey => {
+    ['bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'bab6'].forEach(babKey => {
       (sections[babKey] || []).forEach(sec => {
         if (sec.type === 'equation') {
-          list.push({ ...sec, bab: babKey });
+          list.push({ ...sec, title: getAutoCaption('equation', babKey, sec.id, sec.title, sections), bab: babKey });
         }
       });
     });
     return list;
+  };
+
+  const getBabNumber = (babKey) => {
+    const match = String(babKey || '').match(/\d+/);
+    return match ? match[0] : '1';
+  };
+
+  const usesRomanCaptionNumbering = (babKey, sections = babSections) => {
+    if (layout.preset === 'industri') return true;
+    return (sections[babKey] || []).some((section) => String(section.numberingStyle || '').includes('roman'));
+  };
+
+  const getCaptionBabNumber = (babKey, sections = babSections) => {
+    const numericBab = parseInt(getBabNumber(babKey), 10) || 1;
+    return usesRomanCaptionNumbering(babKey, sections) ? convertToRoman(numericBab) : String(numericBab);
+  };
+
+  const stripCaptionNumberPrefix = (title = '', type = 'figure') => {
+    const label = type === 'table' ? '(?:tabel|table)' : type === 'figure' ? '(?:gambar|figure)' : '(?:rumus|persamaan|equation)';
+    const regex = new RegExp(`^\\s*${label}\\s*(?:\\(?\\s*(?:\\d+|[ivxlcdm]+)(?:\\s*[.\\-]\\s*(?:\\d+|[ivxlcdm]+))*\\s*\\)?)?[\\s.:;-]*`, 'i');
+    return String(title || '').replace(regex, '').trim();
+  };
+
+  const getBlockOrdinalInBab = (babKey, blockId, type, sections = babSections) => {
+    const blocks = sections[babKey] || [];
+    const sameTypeBlocks = blocks.filter(section => section.type === type);
+    const index = sameTypeBlocks.findIndex(section => section.id === blockId || section.blockId === blockId);
+    if (String(blockId || '').startsWith('new_')) return sameTypeBlocks.length + 1;
+    return index !== -1 ? index + 1 : 1;
+  };
+
+  const getAutoCaption = (type, babKey, blockId, title, sections = babSections) => {
+    const label = type === 'table' ? 'Tabel' : type === 'figure' ? 'Gambar' : 'Rumus';
+    const number = `${getCaptionBabNumber(babKey, sections)}.${getBlockOrdinalInBab(babKey, blockId, type, sections)}`;
+    const cleanTitle = stripCaptionNumberPrefix(title, type);
+    return cleanTitle ? `${label} ${number} ${cleanTitle}` : `${label} ${number}`;
+  };
+
+  const getAutoCaptionPrefix = (type, babKey, blockId, sections = babSections) => {
+    const label = type === 'table' ? 'Tabel' : type === 'figure' ? 'Gambar' : 'Rumus';
+    return `${label} ${getCaptionBabNumber(babKey, sections)}.${getBlockOrdinalInBab(babKey, blockId, type, sections)}`;
   };
 
   const buildCurrentDraftPayload = (overrides = {}) => {
@@ -2669,9 +2740,9 @@ export default function Index() {
     const style = headingStyles[`h${level}`] || {};
     return {
       fontFamily: 'var(--doc-font-family)',
-      fontSize: style.fontSize || '12pt',
+      fontSize: level === 3 ? '12pt' : (style.fontSize || '12pt'),
       fontWeight: style.fontWeight || 'bold',
-      fontStyle: style.fontStyle || 'normal',
+      fontStyle: level === 3 ? 'normal' : (style.fontStyle || 'normal'),
       textAlign: style.textAlign || 'left',
       textIndent: 0,
     };
@@ -2724,7 +2795,7 @@ export default function Index() {
     
     if (layout.showPersetujuan) entries.push({ title: "HALAMAN PERSETUJUAN", pageId: 'persetujuan', isBold: true });
     if (layout.showPengesahan) entries.push({ title: "HALAMAN PENGESAHAN", pageId: 'pengesahan', isBold: true });
-    if (layout.showPernyataan) entries.push({ title: "PERNYATAAN ORISINALITAS", pageId: 'pernyataan', isBold: true });
+    if (layout.showPernyataan) entries.push({ title: "LEMBAR PERNYATAAN KEASLIAN", pageId: 'pernyataan', isBold: true });
     if (layout.showAbstractIndo) entries.push({ title: "ABSTRAK", pageId: 'abstrak-indo', isBold: true });
     if (layout.showAbstractEng) entries.push({ title: "ABSTRACT", pageId: 'abstrak-eng', isBold: true });
     
@@ -2787,6 +2858,11 @@ export default function Index() {
     // BAB V
     entries.push({ title: `${babTitles.bab5.prefix} ${babTitles.bab5.title}`, pageId: 'bab5-1', isBold: true, isChapter: true });
     addChapterTocEntries('bab5');
+
+    if (getRenderableBabKeys().includes('bab6')) {
+      entries.push({ title: `${babTitles.bab6.prefix} ${babTitles.bab6.title}`, pageId: 'bab6-1', isBold: true, isChapter: true });
+      addChapterTocEntries('bab6');
+    }
     
     entries.push({ title: "DAFTAR PUSTAKA", pageId: 'daftar-pustaka-1', isBold: true, isChapter: true });
     
@@ -2932,16 +3008,6 @@ export default function Index() {
     return pages;
   };
 
-  const updateApiKey = (val) => {
-    setApiKey(val);
-    try {
-      localStorage.setItem('gemini_api_key', val);
-    } catch (e) {
-      console.error('Error saving API Key:', e);
-    }
-    showToast('API Key Gemini disimpan di penyimpanan lokal browser.');
-  };
-
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -3007,46 +3073,6 @@ export default function Index() {
     return 'Draft Skripsi';
   };
 
-  const fetchTitleRecommendations = async () => {
-    if (!apiKey) {
-      showToast('Masukkan API Key Gemini terlebih dahulu!', true);
-      return;
-    }
-    setLoadingSuggestions(true);
-    setSuggestedTitles([]);
-    showToast('Mencari rekomendasi judul dan metode...');
-    try {
-      const response = await recommendTitlesRequest(apiKey, {
-        fakultas: aiInputs.fakultas,
-        prodi: aiInputs.prodi,
-        topik: aiInputs.topik,
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        showToast(data.error || 'Gagal mencari rekomendasi.', true);
-        return;
-      }
-      setSuggestedTitles(data);
-      showToast('Rekomendasi judul ditemukan.');
-    } catch (e) {
-      showToast('Kesalahan koneksi: ' + e.message, true);
-    } finally {
-      setLoadingSuggestions(false);
-    }
-  };
-
-  const applySuggestedTitle = (item) => {
-    const newTitle = item.judul.toUpperCase();
-    setCover(p => {
-      const updated = { ...p, title: newTitle };
-      saveLocalDraft({ cover: updated });
-      return updated;
-    });
-    // Set suggested topic and method inside the AI panel input as well
-    setAiInputs(p => ({ ...p, topik: item.judul }));
-    showToast('Judul rekomendasi diterapkan.');
-  };
-
   const handleAddReference = (e) => {
     e.preventDefault();
     if (!refInput.author || !refInput.title || !refInput.year) {
@@ -3068,48 +3094,149 @@ export default function Index() {
     showToast('Referensi ditambahkan.');
   };
 
-  const getPagePrintClass = (pageId) => {
-    if (pagesToPrint && !pagesToPrint.includes(pageId)) {
-      return 'no-print-custom';
-    }
-    return '';
-  };
+  const normalizeReferenceKey = (ref = {}) => [ref.author, ref.year, ref.title]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .join('|');
 
-  const resolveSelectedPageIds = (sectionsToExport) => {
-    const allVisiblePages = getVisiblePages();
-    return allVisiblePages.filter(pageId => {
-      if (pageId === 'cover') return sectionsToExport.includes('cover');
-      if (pageId === 'persetujuan') return sectionsToExport.includes('persetujuan');
-      if (pageId === 'pengesahan') return sectionsToExport.includes('pengesahan');
-      if (pageId === 'pernyataan') return sectionsToExport.includes('pernyataan');
-      if (pageId === 'abstrak-indo') return sectionsToExport.includes('abstrak-indo');
-      if (pageId === 'abstrak-eng') return sectionsToExport.includes('abstrak-eng');
-      if (pageId.startsWith('daftar-isi-')) return sectionsToExport.includes('daftar-isi');
-      if (pageId.startsWith('daftar-tabel')) return sectionsToExport.includes('daftar-tabel');
-      if (pageId.startsWith('daftar-gambar')) return sectionsToExport.includes('daftar-gambar');
-      if (pageId.startsWith('daftar-rumus')) return sectionsToExport.includes('daftar-rumus');
-      if (pageId.startsWith('bab1-')) return sectionsToExport.includes('bab1');
-      if (pageId.startsWith('bab2-')) return sectionsToExport.includes('bab2');
-      if (pageId.startsWith('bab3-')) return sectionsToExport.includes('bab3');
-      if (pageId.startsWith('bab4-')) return sectionsToExport.includes('bab4');
-      if (pageId.startsWith('bab5-')) return sectionsToExport.includes('bab5');
-      if (pageId.startsWith('daftar-pustaka-')) return sectionsToExport.includes('daftar-pustaka');
-      return false;
+  const mergeReferences = (incomingRefs, message = 'Referensi diperbarui.') => {
+    const map = new Map();
+    [...references, ...incomingRefs].forEach((ref) => {
+      const key = normalizeReferenceKey(ref);
+      if (!key.replace(/\|/g, '').trim()) return;
+      if (!map.has(key)) map.set(key, ref);
     });
+    const updated = Array.from(map.values());
+    setReferences(updated);
+    saveLocalDraft({ references: updated });
+    showToast(message);
   };
 
-  const executePrintPdf = (pageIds) => {
-    const allPages = getVisiblePages();
-    if (pageIds.length === allPages.length) {
-      window.print();
+  const parseManualReferenceLine = (line, index) => {
+    const text = line.trim().replace(/\s+/g, ' ');
+    if (!text) return null;
+
+    const yearMatch = text.match(/\(?((?:19|20)\d{2})\)?/);
+    const year = yearMatch ? yearMatch[1] : '';
+    const beforeYear = yearMatch ? text.slice(0, yearMatch.index).replace(/[.(),\s]+$/g, '').trim() : '';
+    const afterYear = yearMatch ? text.slice(yearMatch.index + yearMatch[0].length).replace(/^[.(),\s]+/g, '').trim() : text;
+    const parts = afterYear.split(/\.\s+/).map((part) => part.trim()).filter(Boolean);
+    const title = parts[0] || afterYear || 'Judul belum terdeteksi';
+    const publisher = parts.slice(1).join('. ') || '';
+    const author = beforeYear || 'Penulis belum terdeteksi';
+    const isJournal = /jurnal|journal|vol\.?|volume|\d+\s*\(\d+\)|doi/i.test(publisher || text);
+
+    return {
+      id: `ref_manual_${Date.now()}_${index}`,
+      type: isJournal ? 'journal' : 'book',
+      author,
+      year,
+      title: title.replace(/[.\s]+$/g, ''),
+      publisher: publisher.replace(/[.\s]+$/g, ''),
+    };
+  };
+
+  const importManualReferences = () => {
+    const lines = manualReferencesText
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    if (!lines.length) {
+      showToast('Paste daftar pustaka terlebih dahulu.', true);
       return;
     }
-    setPagesToPrint(pageIds);
-    setTimeout(() => {
-      window.print();
-      setPagesToPrint(null);
-    }, 200);
+
+    const parsedRefs = lines.map(parseManualReferenceLine).filter(Boolean);
+    if (!parsedRefs.length) {
+      showToast('Tidak ada referensi yang bisa dibaca dari teks paste.', true);
+      return;
+    }
+
+    mergeReferences(parsedRefs, `${parsedRefs.length} referensi hasil paste ditambahkan.`);
+    setManualReferencesText('');
   };
+
+  const getAllDocumentPlainText = () => Object.values(babSections || {})
+    .flat()
+    .filter((section) => section.type === 'text' && section.content)
+    .map((section) => section.content)
+    .join('\n');
+
+  const compactAuthorName = (author = '') => author
+    .replace(/\bet\s+al\.?/gi, 'et al.')
+    .replace(/\bdkk\.?/gi, 'dkk.')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const detectCitationsFromDocument = () => {
+    const text = getAllDocumentPlainText();
+    const citationMap = new Map();
+    const addCitation = (author, year) => {
+      const cleanAuthor = compactAuthorName(author).replace(/^[,;\s]+|[,;\s]+$/g, '');
+      if (!cleanAuthor || !year) return;
+      if (/^(dan|and|atau|dalam|pada|menurut)$/i.test(cleanAuthor)) return;
+      const key = `${cleanAuthor.toLowerCase()}|${year}`;
+      if (!citationMap.has(key)) {
+        citationMap.set(key, { author: cleanAuthor, year, used: true });
+      }
+    };
+
+    const parentheticalRegex = /\(([^()\n]{2,80}?),\s*((?:19|20)\d{2})\)/g;
+    let match;
+    while ((match = parentheticalRegex.exec(text)) !== null) {
+      match[1].split(/;|\bdan\b|\band\b/gi).forEach((authorPart) => addCitation(authorPart, match[2]));
+    }
+
+    const narrativeRegex = /\b([A-ZÀ-Ý][A-Za-zÀ-ÿ'’.-]+(?:\s+(?:&|dan|and)\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’.-]+|\s+et\s+al\.?|\s+dkk\.?)?)\s*\(((?:19|20)\d{2})\)/g;
+    while ((match = narrativeRegex.exec(text)) !== null) {
+      addCitation(match[1], match[2]);
+    }
+
+    const detected = Array.from(citationMap.values()).sort((a, b) => (
+      a.author.localeCompare(b.author) || String(a.year).localeCompare(String(b.year))
+    ));
+    setDetectedCitations(detected);
+    showToast(detected.length ? `${detected.length} sitasi terdeteksi dari paragraf.` : 'Belum ada pola sitasi yang terdeteksi.', !detected.length);
+  };
+
+  const generateReferencesFromDetectedCitations = () => {
+    const source = detectedCitations.length ? detectedCitations : [];
+    if (!source.length) {
+      showToast('Klik Deteksi Sitasi dulu, atau pastikan paragraf memakai format (Penulis, Tahun).', true);
+      return;
+    }
+
+    const existingByAuthorYear = new Map(references.map((ref) => [
+      `${String(ref.author || '').toLowerCase()}|${String(ref.year || '')}`,
+      ref,
+    ]));
+
+    const generatedRefs = source.map((citation, index) => {
+      const exact = existingByAuthorYear.get(`${citation.author.toLowerCase()}|${citation.year}`);
+      if (exact) return exact;
+      return {
+        id: `ref_detected_${Date.now()}_${index}`,
+        type: 'journal',
+        author: citation.author,
+        year: citation.year,
+        title: 'Lengkapi judul referensi sesuai sumber asli',
+        publisher: 'Lengkapi nama jurnal/penerbit, volume(nomor), halaman, atau kota penerbit',
+        detectedOnly: true,
+      };
+    });
+
+    const map = new Map();
+    generatedRefs.forEach((ref) => map.set(`${String(ref.author || '').toLowerCase()}|${String(ref.year || '')}`, ref));
+    const updated = Array.from(map.values()).sort((a, b) => (
+      String(a.author || '').localeCompare(String(b.author || '')) || String(a.year || '').localeCompare(String(b.year || ''))
+    ));
+
+    setReferences(updated);
+    saveLocalDraft({ references: updated });
+    showToast('Daftar pustaka otomatis dibuat dari sitasi yang dipakai. Lengkapi data placeholder yang belum lengkap.');
+  };
+
+  const getPagePrintClass = (pageId) => resolvePagePrintClass(pagesToPrint, pageId);
 
   const executeWordExport = async (pageIds, filename) => {
     let combinedHtml = '';
@@ -3230,7 +3357,10 @@ export default function Index() {
             if (cleanedPart) {
               const listMatch = cleanedPart.match(/^([0-9a-zA-Z]+[\.\)])\s+(.*)$/);
               if (listMatch) {
-                out += `<p style="margin:0; margin-left:${leftIndent + 1}cm; margin-right:${rightIndent}cm; text-indent:-1cm; mso-tab-stops:1.0cm; text-align:${paragraphAlign}; line-height:${wordLineHeight}; font-family:${cleanFontFamily}; font-size:${baseFontSize};"><span style="font-weight:bold;">${listMatch[1]}</span><span style="mso-tab-count:1">&#9;</span>${italicizeEnglishWordsText(listMatch[2].trimStart())}</p>`;
+                const isAlphaSubPoint = /^[a-z][\.)]$/.test(listMatch[1]);
+                const listLeftIndent = leftIndent + (isAlphaSubPoint ? 1.55 : 1);
+                const hangingIndent = isAlphaSubPoint ? 0.55 : 1;
+                out += `<p style="margin:0; margin-left:${listLeftIndent}cm; margin-right:${rightIndent}cm; text-indent:-${hangingIndent}cm; mso-tab-stops:${hangingIndent}cm; text-align:${paragraphAlign}; line-height:${wordLineHeight}; font-family:${cleanFontFamily}; font-size:${baseFontSize};"><span style="font-weight:bold;">${listMatch[1]}</span><span style="mso-tab-count:1">&#9;</span>${italicizeEnglishWordsText(listMatch[2].trimStart())}</p>`;
               } else {
                 out += `<p class="paragraph-content" style="${paragraphMargin} text-indent:${textIndent}cm; text-align:${paragraphAlign}; margin-top:0; margin-bottom:0; line-height:${wordLineHeight}; font-family:${cleanFontFamily}; font-size:${baseFontSize};">${italicizeEnglishWordsText(cleanedPart)}</p>`;
               }
@@ -3257,7 +3387,7 @@ export default function Index() {
             const hs = headingStyles[`h${lvl}`] || {};
             let titleHtml = italicizeEnglishWordsText(`${sec.resolvedPrefix || ''}${sec.title || ''}`);
             if (hs.uppercase) titleHtml = titleHtml.toUpperCase();
-            html += `<h${lvl} class="MsoHeading${lvl}" style="mso-outline-level:${lvl}; text-align:${hs.textAlign || 'left'}; font-size:${hs.fontSize || '12pt'}; font-weight:${hs.fontWeight || 'bold'}; font-style:${hs.fontStyle || 'normal'}; font-family:${cleanFontFamily};">${titleHtml}</h${lvl}>`;
+            html += `<h${lvl} class="MsoHeading${lvl}" style="mso-outline-level:${lvl}; text-align:${hs.textAlign || 'left'}; font-size:${lvl === 3 ? '12pt' : (hs.fontSize || '12pt')}; font-weight:${hs.fontWeight || 'bold'}; font-style:${lvl === 3 ? 'normal' : (hs.fontStyle || 'normal')}; font-family:${cleanFontFamily};">${titleHtml}</h${lvl}>`;
           }
           if (sec.content && sec.content.trim()) {
             html += renderContentText(sec.content, sec.textAlign || layout.textAlign || 'justify', sec);
@@ -3751,8 +3881,9 @@ export default function Index() {
             mso-outline-level: 2;
           }
           h3 {
-            font-size: ${headingStyles?.h3?.fontSize || '12pt'};
+            font-size: 12pt;
             font-weight: ${headingStyles?.h3?.fontWeight || 'bold'};
+            font-style: normal;
             text-align: ${headingStyles?.h3?.textAlign || 'left'};
             font-family: ${cleanFontFamily};
             margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
@@ -3872,7 +4003,7 @@ export default function Index() {
     if (downloadRange === 'all') {
       targetPageIds = getVisiblePages();
     } else {
-      targetPageIds = resolveSelectedPageIds(selectedDownloadSections);
+      targetPageIds = resolveSelectedPageIds(getVisiblePages, selectedDownloadSections);
     }
 
     if (targetPageIds.length === 0) {
@@ -3891,16 +4022,14 @@ export default function Index() {
     setTimeout(() => {
       if (downloadFormat === 'docx') {
         if (downloadSplit) {
-          let sectionsToDownload = downloadRange === 'all' 
-            ? ['cover', 'persetujuan', 'pengesahan', 'pernyataan', 'abstrak-indo', 'abstrak-eng', 'daftar-isi', 'daftar-tabel', 'daftar-gambar', 'daftar-rumus', 'bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'daftar-pustaka']
-            : selectedDownloadSections;
+          let sectionsToDownload = getSectionsToExport(downloadRange, selectedDownloadSections);
             
           let delay = 0;
           sectionsToDownload.forEach((secId) => {
-            const secPages = resolveSelectedPageIds([secId]);
+            const secPages = resolveSelectedPageIds(getVisiblePages, [secId]);
             if (secPages.length > 0) {
               const secName = secId.startsWith('bab') 
-                ? `${babTitles[secId].prefix} ${babTitles[secId].title}` 
+                ? `${babTitles[secId]?.prefix || secId.toUpperCase()} ${babTitles[secId]?.title || ''}` 
                 : (SECTION_GROUPS.find(g => g.id === secId)?.name || secId);
               const cleanSecName = secName.replace(/[^a-zA-Z0-9]/g, "_");
               const filename = `${cleanAuthor}_${cleanSecName}`;
@@ -3927,28 +4056,12 @@ export default function Index() {
       } else {
         // PDF format
         if (downloadSplit) {
-          let sectionsToDownload = downloadRange === 'all' 
-            ? ['cover', 'persetujuan', 'pengesahan', 'pernyataan', 'abstrak-indo', 'abstrak-eng', 'daftar-isi', 'daftar-tabel', 'daftar-gambar', 'daftar-rumus', 'bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'daftar-pustaka']
-            : selectedDownloadSections;
+          let sectionsToDownload = getSectionsToExport(downloadRange, selectedDownloadSections);
 
           showToast("Mulai cetak PDF terpisah. Silakan klik simpan pada dialog cetak yang muncul.");
-          
-          let delay = 0;
-          sectionsToDownload.forEach((secId) => {
-            const secPages = resolveSelectedPageIds([secId]);
-            if (secPages.length > 0) {
-              setTimeout(() => {
-                setPagesToPrint(secPages);
-                window.print();
-              }, delay);
-              delay += 1200;
-            }
-          });
-          setTimeout(() => {
-            setPagesToPrint(null);
-          }, delay + 500);
+          executeSplitPrintPdf({ sectionsToExport: sectionsToDownload, getVisiblePages, setPagesToPrint });
         } else {
-          executePrintPdf(targetPageIds);
+          executePrintPdf({ pageIds: targetPageIds, getVisiblePages, setPagesToPrint });
         }
       }
     }, 350);
@@ -4001,7 +4114,101 @@ export default function Index() {
   
   const applyPreset = (type) => {
     let newLayout = { ...layout, preset: type };
-    if (type === 'dikti') {
+    if (type === 'informatika') {
+      newLayout = {
+        ...newLayout,
+        marginTop: 4.0,
+        marginLeft: 4.0,
+        marginBottom: 3.0,
+        marginRight: 3.0,
+        fontFamily: "'Times New Roman', Times, serif",
+        fontSize: '12pt',
+        lineSpacing: '1.5',
+        textAlign: 'justify',
+        tableLineSpacing: '1.0',
+        tableTextAlign: 'left',
+        pageNumPosition: 'flexible',
+        hideCoverNum: true,
+        romanPrelims: true,
+        paragraphIndent: 'indented',
+        showPersetujuan: true,
+        showPengesahan: true,
+        showPernyataan: true,
+        showAbstractIndo: true,
+        showAbstractEng: true,
+        showDaftarRumus: false
+      };
+      const informatikaBabTitles = {
+        bab1: { prefix: "BAB I", title: "PENDAHULUAN" },
+        bab2: { prefix: "BAB II", title: "TINJAUAN PUSTAKA/LANDASAN TEORI" },
+        bab3: { prefix: "BAB III", title: "ANALISIS DAN PERANCANGAN" },
+        bab4: { prefix: "BAB IV", title: "IMPLEMENTASI DAN PENGUJIAN" },
+        bab5: { prefix: "BAB V", title: "PENUTUP" }
+      };
+      const updatedCover = {
+        ...cover,
+        prodi: 'Teknik Informatika',
+        fakultas: cover.fakultas || 'Fakultas Teknik',
+        univ: cover.univ || 'Universitas Suryakancana',
+        city: cover.city || 'Cianjur'
+      };
+      setBabTitles(informatikaBabTitles);
+      setCover(updatedCover);
+      saveLocalDraft({ babTitles: informatikaBabTitles, cover: updatedCover });
+      showToast('Preset Teknik Informatika diterapkan sesuai panduan TA');
+    } else if (type === 'industri') {
+      newLayout = {
+        ...newLayout,
+        marginTop: 3.0,
+        marginLeft: 4.0,
+        marginBottom: 3.0,
+        marginRight: 3.0,
+        fontFamily: "'Times New Roman', Times, serif",
+        fontSize: '12pt',
+        lineSpacing: '1.5',
+        textAlign: 'justify',
+        tableLineSpacing: '1.0',
+        tableTextAlign: 'left',
+        pageNumPosition: 'bottom-center',
+        hideCoverNum: true,
+        romanPrelims: true,
+        paragraphIndent: 'indented',
+        showPersetujuan: false,
+        showPengesahan: true,
+        showPernyataan: false,
+        showAbstractIndo: true,
+        showAbstractEng: true,
+        showDaftarRumus: false
+      };
+      const industriBabTitles = {
+        bab1: { prefix: "Bab I", title: "Pendahuluan" },
+        bab2: { prefix: "Bab II", title: "Landasan Teori" },
+        bab3: { prefix: "Bab III", title: "Metodologi Penelitian" },
+        bab4: { prefix: "Bab IV", title: "Pengumpulan dan Pengolahan Data" },
+        bab5: { prefix: "Bab V", title: "Hasil Analisa dan Pembahasan" },
+        bab6: { prefix: "Bab VI", title: "Kesimpulan dan Saran" }
+      };
+      const updatedCover = {
+        ...cover,
+        prodi: 'Teknik Industri',
+        fakultas: cover.fakultas || 'Fakultas Teknik',
+        univ: cover.univ || 'Universitas Suryakancana',
+        city: cover.city || 'Cianjur'
+      };
+      const updatedBabSections = Object.fromEntries(
+        Object.entries(babSections).map(([key, sections]) => [
+          key,
+          (sections || []).map(section => section.type === 'text' && section.headingLevel > 0
+            ? { ...section, numberingStyle: 'bab_roman_prefix_dot' }
+            : section)
+        ])
+      );
+      setBabTitles(prev => ({ ...prev, ...industriBabTitles }));
+      setBabSections(updatedBabSections);
+      setCover(updatedCover);
+      saveLocalDraft({ babTitles: { ...babTitles, ...industriBabTitles }, babSections: updatedBabSections, cover: updatedCover });
+      showToast('Preset Teknik Industri diterapkan dari pedoman KP/TA 2022');
+    } else if (type === 'dikti') {
       newLayout = {
         ...newLayout,
         marginTop: 4.0,
@@ -4031,6 +4238,9 @@ export default function Index() {
         tableTextAlign: 'left'
       };
       showToast('Preset Format Ringkas diterapkan (3-3-3-3)');
+    } else if (type === 'sipil') {
+      showToast('Preset Teknik Sipil belum tersedia.', true);
+      return;
     }
     setLayout(newLayout);
     saveLocalDraft({ layout: newLayout });
@@ -4113,7 +4323,7 @@ export default function Index() {
     // Now, push BAB pages dynamically!
     const babPagesMap = getBabPagesMap();
     const skipEmptyBab = blank || !!layout.hideEmptyChapters;
-    ['bab1', 'bab2', 'bab3', 'bab4', 'bab5'].forEach(babKey => {
+    getRenderableBabKeys().forEach(babKey => {
       // In blank/outline mode, skip chapters that have no sections
       if (skipEmptyBab && (!babSections[babKey] || babSections[babKey].length === 0)) return;
       const pageCount = babPagesMap[babKey] ? babPagesMap[babKey].length : 1;
@@ -4189,7 +4399,7 @@ export default function Index() {
     }
     // Chapter start pages (first page of each BAB and Daftar Pustaka)
     const chapterStartPages = [
-      'bab1-1', 'bab2-1', 'bab3-1', 'bab4-1', 'bab5-1', 
+      'bab1-1', 'bab2-1', 'bab3-1', 'bab4-1', 'bab5-1', ...(getRenderableBabKeys().includes('bab6') ? ['bab6-1'] : []),
       'daftar-pustaka-1'
     ];
     return chapterStartPages.includes(pageId);
@@ -4232,9 +4442,9 @@ export default function Index() {
         
         const inlineStyle = {
           fontFamily: 'var(--doc-font-family)',
-          fontSize: style.fontSize || '12pt',
+          fontSize: level === 3 ? '12pt' : (style.fontSize || '12pt'),
           fontWeight: style.fontWeight || 'bold',
-          fontStyle: style.fontStyle || 'normal',
+          fontStyle: level === 3 ? 'normal' : (style.fontStyle || 'normal'),
           textAlign: style.textAlign || 'left',
           textIndent: 0,
           marginTop: '16px',
@@ -4278,39 +4488,7 @@ export default function Index() {
   // GOOGLE SCHOLAR CITATION SEARCH (AI ASSISTED)
   // ==========================================================================
   
-  const handleScholarSearch = async (e) => {
-    e.preventDefault();
-    if (!scholarQuery.trim()) return;
-    if (!apiKey) {
-      showToast('Masukkan API Key Gemini terlebih dahulu!', true);
-      return;
-    }
-    
-    setSearchingScholar(true);
-    setScholarResults([]);
-    showToast('Mencari referensi di database Google Scholar / ResearchGate...');
 
-    try {
-      const response = await searchCitationRequest(apiKey, {
-        query: scholarQuery,
-        yearStart: scholarYearStart,
-        yearEnd: scholarYearEnd,
-      });
-
-      const resData = await response.json();
-      if (!response.ok) {
-        showToast(resData.error || 'Gagal mencari sitasi.', true);
-        return;
-      }
-
-      setScholarResults(resData);
-      showToast('Hasil sitasi ditemukan.');
-    } catch (e) {
-      showToast('Koneksi terganggu: ' + e.message, true);
-    } finally {
-      setSearchingScholar(false);
-    }
-  };
 
   const importCitation = (citation) => {
     const newRef = {
@@ -4326,6 +4504,11 @@ export default function Index() {
     setReferences(updated);
     saveLocalDraft({ references: updated });
     showToast(`Referensi oleh "${citation.author}" ditambahkan ke Daftar Pustaka.`);
+  };
+
+  const updateReferences = (nextReferences) => {
+    setReferences(nextReferences);
+    saveLocalDraft({ references: nextReferences });
   };
 
   // ==========================================================================
@@ -4506,7 +4689,7 @@ export default function Index() {
           title: 'Sub-Bab Baru',
           content: '',
           page: 1,
-          numberingStyle: 'bab_prefix_dot'
+          numberingStyle: layout.preset === 'industri' ? 'bab_roman_prefix_dot' : 'bab_prefix_dot'
         };
       } else if (type === 'equation') {
         newBlock = {
@@ -4544,6 +4727,57 @@ export default function Index() {
     const displayType = type === 'sub-bab' ? 'Sub-Bab' : type === 'text' ? 'Paragraf' : type === 'table' ? 'Tabel' : type === 'figure' ? 'Gambar' : type === 'equation' ? 'Rumus' : 'Konten';
     const displayPos = position === 'above' ? 'di atas' : 'di bawah';
     showToast(`${displayType} baru berhasil ditambahkan ${displayPos}!`);
+  };
+
+  const handleConvertSectionToCaption = (babKey, secId, type) => {
+    setBabSections(prev => {
+      const currentList = prev[babKey] || [];
+      const idx = currentList.findIndex(sec => sec.id === secId);
+      if (idx === -1) return prev;
+
+      const source = currentList[idx];
+      const captionText = (source.title || source.content || '').split('\n')[0].trim();
+      const timestamp = Date.now();
+      let convertedBlock;
+
+      if (type === 'table') {
+        convertedBlock = {
+          id: 'caption_tab_' + timestamp,
+          type: 'table',
+          title: captionText || 'Tabel Baru',
+          page: 1,
+          headers: 'No, Kolom 1, Kolom 2',
+          rowsText: '1, Data A, Data B\n2, Data C, Data D',
+          rows: [['1', 'Data A', 'Data B'], ['2', 'Data C', 'Data D']]
+        };
+      } else if (type === 'figure') {
+        convertedBlock = {
+          id: 'caption_fig_' + timestamp,
+          type: 'figure',
+          title: captionText || 'Gambar Baru',
+          page: 1,
+          imageData: null
+        };
+      } else {
+        convertedBlock = {
+          id: 'caption_eq_' + timestamp,
+          type: 'equation',
+          title: captionText || 'Persamaan Baru',
+          content: 'y = a + bx',
+          description: 'y = Variabel Dependen\na = Konstanta\nb = Koefisien\nx = Variabel Independen',
+          page: 1
+        };
+      }
+
+      const updatedList = [...currentList];
+      updatedList[idx] = convertedBlock;
+      const updated = { ...prev, [babKey]: updatedList };
+      saveLocalDraft({ babSections: updated });
+      return updated;
+    });
+
+    const label = type === 'table' ? 'Tabel' : type === 'figure' ? 'Gambar' : 'Rumus';
+    showToast(`Blok berhasil dijadikan caption ${label}.`);
   };
 
   // ==========================================================================
@@ -4717,10 +4951,10 @@ export default function Index() {
         
         const fallbackBabTitles = data.babTitles || {
           bab1: { prefix: "BAB I", title: "PENDAHULUAN" },
-          bab2: { prefix: "BAB II", title: "TINJAUAN PUSTAKA" },
-          bab3: { prefix: "BAB III", title: "METODOLOGI PENELITIAN" },
-          bab4: { prefix: "BAB IV", title: "HASIL DAN PEMBAHASAN" },
-          bab5: { prefix: "BAB V", title: "KESIMPULAN DAN SARAN" }
+          bab2: { prefix: "BAB II", title: "TINJAUAN PUSTAKA/LANDASAN TEORI" },
+          bab3: { prefix: "BAB III", title: "ANALISIS DAN PERANCANGAN" },
+          bab4: { prefix: "BAB IV", title: "IMPLEMENTASI DAN PENGUJIAN" },
+          bab5: { prefix: "BAB V", title: "PENUTUP" }
         };
         setBabTitles(fallbackBabTitles);
         
@@ -4825,205 +5059,60 @@ export default function Index() {
     }
   };
 
-  const triggerAIGenerateFlow = (target) => {
-    setAiPromptInput('');
-    setAiPromptTarget(target);
-    setShowAiPromptModal(true);
-  };
 
-  const closeAiPromptModal = () => {
-    setShowAiPromptModal(false);
-    setAiPromptTarget(null);
-  };
 
-  const generateAiPromptTarget = (prompt = '') => {
-    const target = aiPromptTarget;
-    closeAiPromptModal();
-    if (!target) return;
-    if (target.legacyKey) {
-      handleAIGenerateSection(target.legacyKey, target.displayTitle, prompt);
-    } else {
-      handleAIGenerateDynamic(target.babKey, target.id, target.displayTitle, prompt);
-    }
-  };
 
-  const handleAIGenerateSection = async (sectionKey, displayTitle, additionalPrompt = '') => {
-    if (!apiKey) {
-      showToast('Masukkan API Key Gemini terlebih dahulu!', true);
-      return;
-    }
-    // Find the section ID for the legacy key, and set that as generatingSection
-    const legacyToId = Object.entries(legacySectionKeyMapping).find(([, v]) => v === sectionKey);
-    const trackingId = legacyToId ? legacyToId[0] : sectionKey;
-    setGeneratingSection(trackingId);
-    showToast(`Menghubungi Gemini untuk draf ${displayTitle}...`);
 
-    try {
-      const response = await generateSectionRequest(apiKey, {
-        title: cover.title,
-        section: sectionKey,
-        topik: aiInputs.topik,
-        metode: tables.length > 0 ? 'Fuzzy/KNN/PLS-SEM' : 'Metode Deskriptif',
-        ai_write_style: sectionKey === 'latar_belakang' ? backgroundStyle : 'direct',
-        year_start: scholarYearStart,
-        year_end: scholarYearEnd,
-        additional_prompt: additionalPrompt,
-      });
 
-      const resData = await response.json();
-      if (!response.ok) {
-        showToast(resData.error || 'Gagal menghasilkan konten.', true);
-        return;
-      }
-
-      const content = resData.content;
-      
-      if (sectionKey === 'latar_belakang') updateSectionContentById('bab1', 'b1s1', content);
-      else if (sectionKey === 'identifikasi_masalah') updateSectionContentById('bab1', 'b1s2', content);
-      else if (sectionKey === 'rumusan_masalah') updateSectionContentById('bab1', 'b1s3', content);
-      else if (sectionKey === 'penelitian_terdahulu') updateSectionContentById('bab2', 'b2s1', content);
-      else if (sectionKey === 'grand_theory') updateSectionContentById('bab2', 'b2s2', content);
-      else if (sectionKey === 'middle_theory') updateSectionContentById('bab2', 'b2s3', content);
-      else if (sectionKey === 'applied_theory') updateSectionContentById('bab2', 'b2s4', content);
-      else if (sectionKey === 'desain_penelitian') updateSectionContentById('bab3', 'b3s1', content);
-      else if (sectionKey === 'tempat_waktu') updateSectionContentById('bab3', 'b3s2', content);
-      else if (sectionKey === 'pengumpulan_data') updateSectionContentById('bab3', 'b3s3', content);
-      else if (sectionKey === 'analisis_data') updateSectionContentById('bab3', 'b3s4', content);
-      else if (sectionKey === 'deskripsi_data') updateSectionContentById('bab4', 'b4s1', content);
-      else if (sectionKey === 'pembahasan') updateSectionContentById('bab4', 'b4s2', content);
-      else if (sectionKey === 'kesimpulan') updateSectionContentById('bab5', 'b5s1', content);
-      else if (sectionKey === 'saran') updateSectionContentById('bab5', 'b5s2', content);
-
-      // Handle table auto-insertion if present in JSON response
-      if (resData.table) {
-        const sectionMapping = {
-          latar_belakang: { babKey: 'bab1', blockId: 'b1s1' },
-          identifikasi_masalah: { babKey: 'bab1', blockId: 'b1s2' },
-          rumusan_masalah: { babKey: 'bab1', blockId: 'b1s3' },
-          penelitian_terdahulu: { babKey: 'bab2', blockId: 'b2s1' },
-          grand_theory: { babKey: 'bab2', blockId: 'b2s2' },
-          middle_theory: { babKey: 'bab2', blockId: 'b2s3' },
-          applied_theory: { babKey: 'bab2', blockId: 'b2s4' },
-          desain_penelitian: { babKey: 'bab3', blockId: 'b3s1' },
-          tempat_waktu: { babKey: 'bab3', blockId: 'b3s2' },
-          pengumpulan_data: { babKey: 'bab3', blockId: 'b3s3' },
-          analisis_data: { babKey: 'bab3', blockId: 'b3s4' },
-          deskripsi_data: { babKey: 'bab4', blockId: 'b4s1' },
-          pembahasan: { babKey: 'bab4', blockId: 'b4s2' },
-          kesimpulan: { babKey: 'bab5', blockId: 'b5s1' },
-          saran: { babKey: 'bab5', blockId: 'b5s2' },
-        };
-        const mapping = sectionMapping[sectionKey];
-        if (mapping) {
-          const { babKey, blockId } = mapping;
-          const tableData = resData.table;
-          setBabSections(prev => {
-            const currentList = prev[babKey] || [];
-            const idx = currentList.findIndex(sec => sec.id === blockId);
-            if (idx === -1) return prev;
-            
-            const newBlock = {
-              id: 'sec_tab_' + Date.now(),
-              type: 'table',
-              title: tableData.title || 'Tabel Hasil Generasi',
-              page: 1,
-              headers: tableData.headers || 'No, Kolom 1, Kolom 2',
-              rowsText: Array.isArray(tableData.rows) ? tableData.rows.map(r => r.join(', ')).join('\n') : '',
-              rows: tableData.rows || [['1', 'Data A', 'Data B']]
-            };
-            
-            const updatedList = [...currentList];
-            updatedList.splice(idx + 1, 0, newBlock);
-            
-            const updated = {
-              ...prev,
-              [babKey]: updatedList
-            };
-            saveLocalDraft({ babSections: updated });
-            return updated;
-          });
-          showToast(`Tabel perbandingan berhasil disisipkan secara otomatis!`);
-        }
-      }
-
-      showToast(`Konten ${displayTitle} berhasil ditulis oleh AI!`);
-    } catch (e) {
-      showToast('Koneksi terganggu: ' + e.message, true);
-    } finally {
-      setGeneratingSection(null);
-    }
-  };
 
   // Dynamic AI generation for any section (e.g., imported from DOCX)
-  const handleAIGenerateDynamic = async (babKey, sectionId, sectionTitle, additionalPrompt = '') => {
-    if (!apiKey) {
-      showToast('Masukkan API Key Gemini terlebih dahulu!', true);
-      return;
-    }
-    setGeneratingSection(sectionId);
-    showToast(`Menghubungi Gemini untuk draf "${sectionTitle}"...`);
+  const aiAssistant = useAiAssistant({
+    cover,
+    tables: getAllTables(),
+    scholarYearStart,
+    scholarYearEnd,
+    backgroundStyle,
+    legacySectionKeyMapping,
+    updateSectionContentById,
+    setBabSections,
+    saveLocalDraft,
+    showToast,
+    babTitles,
+    babSections,
+  });
 
-    // Determine bab number and context dynamically from babTitles
-    const currentBab = babTitles[babKey];
-    const babContext = currentBab ? `${currentBab.prefix} (${currentBab.title})` : `BAB ${babKey.replace('bab', '')}`;
-
-    try {
-      const response = await generateSectionRequest(apiKey, {
-        title: cover.title,
-        section: '__dynamic__',
-        section_title: sectionTitle,
-        bab_context: babContext,
-        topik: aiInputs.topik,
-        metode: tables.length > 0 ? 'Fuzzy/KNN/PLS-SEM' : 'Metode Deskriptif',
-        additional_prompt: additionalPrompt,
-      });
-
-      const resData = await response.json();
-      if (!response.ok) {
-        showToast(resData.error || 'Gagal menghasilkan konten.', true);
-        return;
-      }
-
-      updateSectionContentById(babKey, sectionId, resData.content);
-
-      // Handle table auto-insertion if present in JSON response
-      if (resData.table) {
-        const tableData = resData.table;
-        setBabSections(prev => {
-          const currentList = prev[babKey] || [];
-          const idx = currentList.findIndex(sec => sec.id === sectionId);
-          if (idx === -1) return prev;
-          
-          const newBlock = {
-            id: 'sec_tab_' + Date.now(),
-            type: 'table',
-            title: tableData.title || 'Tabel Hasil Generasi',
-            page: 1,
-            headers: tableData.headers || 'No, Kolom 1, Kolom 2',
-            rowsText: Array.isArray(tableData.rows) ? tableData.rows.map(r => r.join(', ')).join('\n') : '',
-            rows: tableData.rows || [['1', 'Data A', 'Data B']]
-          };
-          
-          const updatedList = [...currentList];
-          updatedList.splice(idx + 1, 0, newBlock);
-          
-          const updated = {
-            ...prev,
-            [babKey]: updatedList
-          };
-          saveLocalDraft({ babSections: updated });
-          return updated;
-        });
-        showToast(`Tabel perbandingan berhasil disisipkan secara otomatis!`);
-      }
-
-      showToast(`Konten "${sectionTitle}" berhasil ditulis oleh AI!`);
-    } catch (e) {
-      showToast('Koneksi terganggu: ' + e.message, true);
-    } finally {
-      setGeneratingSection(null);
-    }
-  };
+  const apiKey = aiAssistant.apiKey;
+  const aiInputs = aiAssistant.aiInputs;
+  const setAiInputs = aiAssistant.setAiInputs;
+  const suggestedTitles = aiAssistant.suggestedTitles;
+  const loadingSuggestions = aiAssistant.loadingSuggestions;
+  const showAiPromptModal = aiAssistant.showAiPromptModal;
+  const aiPromptTarget = aiAssistant.aiPromptTarget;
+  const aiPromptInput = aiAssistant.aiPromptInput;
+  const setAiPromptInput = aiAssistant.setAiPromptInput;
+  const generatingSection = aiAssistant.generatingSection;
+  const chatMessages = aiAssistant.chatMessages;
+  const chatInput = aiAssistant.chatInput;
+  const setChatInput = aiAssistant.setChatInput;
+  const chatLoading = aiAssistant.chatLoading;
+  const scholarQuery = aiAssistant.scholarQuery;
+  const setScholarQuery = aiAssistant.setScholarQuery;
+  const scholarYearStartVal = aiAssistant.scholarYearStartVal;
+  const setScholarYearStartVal = aiAssistant.setScholarYearStart;
+  const scholarYearEndVal = aiAssistant.scholarYearEndVal;
+  const setScholarYearEndVal = aiAssistant.setScholarYearEnd;
+  const searchingScholar = aiAssistant.searchingScholar;
+  const scholarResults = aiAssistant.scholarResults;
+  const setScholarResults = aiAssistant.setScholarResults;
+  const handleApiKeyChange = aiAssistant.handleApiKeyChange;
+  const fetchTitleRecommendations = aiAssistant.fetchTitleRecommendations;
+  const openAiPromptModal = aiAssistant.openAiPromptModal;
+  const closeAiPromptModal = aiAssistant.closeAiPromptModal;
+  const generateAiPromptTarget = aiAssistant.generateAiPromptTarget;
+  const sendChatMessage = aiAssistant.sendChatMessage;
+  const handleScholarSearch = aiAssistant.handleScholarSearch;
+  const triggerAIGenerateFlow = aiAssistant.openAiPromptModal;
+  const applySuggestedTitle = (item) => aiAssistant.applySuggestedTitle(item, setCover);
 
   return (
     <>
@@ -5073,6 +5162,7 @@ export default function Index() {
             <button onClick={() => setActiveTab('konten')} className={`flex-1 py-2 rounded-md flex flex-col items-center gap-0.5 transition-all ${activeTab === 'konten' ? 'bg-white dark:bg-slate-900 text-indigo-500 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}><FileText className="h-3.5 w-3.5" />Isi Konten</button>
             <button onClick={() => setActiveTab('navigasi')} className={`flex-1 py-2 rounded-md flex flex-col items-center gap-0.5 transition-all ${activeTab === 'navigasi' ? 'bg-white dark:bg-slate-900 text-indigo-500 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}><Compass className="h-3.5 w-3.5" />Navigasi</button>
             <button onClick={() => setActiveTab('asisten')} className={`flex-1 py-2 rounded-md flex flex-col items-center gap-0.5 transition-all ${activeTab === 'asisten' ? 'bg-white dark:bg-slate-900 text-indigo-500 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}><Sparkles className="h-3.5 w-3.5" />Asisten AI</button>
+            <button onClick={() => setActiveTab('chat')} className={`flex-1 py-2 rounded-md flex flex-col items-center gap-0.5 transition-all ${activeTab === 'chat' ? 'bg-white dark:bg-slate-900 text-indigo-500 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}><MessageCircle className="h-3.5 w-3.5" />AI Chat</button>
             <button onClick={() => setActiveTab('referensi')} className={`flex-1 py-2 rounded-md flex flex-col items-center gap-0.5 transition-all ${activeTab === 'referensi' ? 'bg-white dark:bg-slate-900 text-indigo-500 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}><BookOpen className="h-3.5 w-3.5" />Pustaka</button>
           </div>
 
@@ -5552,12 +5642,39 @@ export default function Index() {
                         <div
                           key={sec.id}
                           id={`content-editor-block-${sec.id}`}
+                          onContextMenu={(event) => {
+                            event.preventDefault();
+                            setInsertMenu({
+                              blockId: sec.id,
+                              position: 'context',
+                              x: event.clientX,
+                              y: event.clientY,
+                            });
+                          }}
                           className={`p-3 bg-slate-50 dark:bg-slate-800/40 border rounded-xl space-y-2 scroll-mt-24 transition-colors ${
                             focusedContentBlockId === sec.id
                               ? 'border-indigo-500 ring-2 ring-indigo-500/20'
                               : 'border-slate-200 dark:border-slate-800/60'
                           }`}
                         >
+                          {insertMenu.blockId === sec.id && insertMenu.position === 'context' && (
+                            <>
+                              <div className="fixed inset-0 z-40" onClick={() => setInsertMenu({ blockId: null, position: null })} />
+                              <div
+                                className="fixed z-50 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl py-1 min-w-[190px] flex flex-col text-[10px]"
+                                style={{ left: insertMenu.x, top: insertMenu.y }}
+                              >
+                                <div className="px-3 py-1 text-[9px] font-bold uppercase text-slate-400 border-b border-slate-200 dark:border-slate-800">Insert Caption</div>
+                                <button type="button" onClick={() => { handleConvertSectionToCaption(activeSection, sec.id, 'table'); setInsertMenu({ blockId: null, position: null }); }} className="text-left px-3 py-1.5 font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800">Jadikan Caption Tabel</button>
+                                <button type="button" onClick={() => { handleConvertSectionToCaption(activeSection, sec.id, 'figure'); setInsertMenu({ blockId: null, position: null }); }} className="text-left px-3 py-1.5 font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800">Jadikan Caption Gambar</button>
+                                <button type="button" onClick={() => { handleConvertSectionToCaption(activeSection, sec.id, 'equation'); setInsertMenu({ blockId: null, position: null }); }} className="text-left px-3 py-1.5 font-bold text-slate-700 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-800">Jadikan Caption Rumus</button>
+                                <div className="my-1 border-t border-slate-200 dark:border-slate-800" />
+                                <button type="button" onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'table'); setInsertMenu({ blockId: null, position: null }); }} className="text-left px-3 py-1.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">Sisipkan Tabel di Bawah</button>
+                                <button type="button" onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'figure'); setInsertMenu({ blockId: null, position: null }); }} className="text-left px-3 py-1.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">Sisipkan Gambar di Bawah</button>
+                                <button type="button" onClick={() => { handleInsertSection(activeSection, sec.id, 'below', 'equation'); setInsertMenu({ blockId: null, position: null }); }} className="text-left px-3 py-1.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">Sisipkan Rumus di Bawah</button>
+                              </div>
+                            </>
+                          )}
                            <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800/60 pb-1.5">
                              <span className="font-bold text-slate-400 text-[10px]">
                                {sec.type === 'table' 
@@ -5597,14 +5714,23 @@ export default function Index() {
                              <div className="space-y-2">
                                <div>
                                  <label className="text-[9px] text-slate-400 block mb-0.5">Judul Tabel (Caption)</label>
-                                 <input 
-                                   id={`content-title-${sec.id}`}
-                                   type="text" 
-                                   value={sec.title} 
-                                   onChange={e => handleUpdateSectionField(activeSection, sec.id, 'title', e.target.value)} 
-                                   className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs" 
-                                 />
-                               </div>
+                                  <div className="flex overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950">
+                                    <span className="shrink-0 border-r border-slate-200 dark:border-slate-800 bg-indigo-600/10 px-2 py-1.5 text-[10px] font-bold text-indigo-500 dark:text-indigo-300">
+                                      {getAutoCaptionPrefix('table', activeSection, sec.id)}
+                                    </span>
+                                    <input 
+                                      id={`content-title-${sec.id}`}
+                                      type="text" 
+                                      value={stripCaptionNumberPrefix(sec.title, 'table')} 
+                                      onChange={e => handleUpdateSectionField(activeSection, sec.id, 'title', e.target.value)} 
+                                      placeholder="Judul tabel tanpa nomor"
+                                      className="min-w-0 flex-1 bg-transparent p-1.5 text-xs outline-none" 
+                                    />
+                                  </div>
+                                  <p className="mt-1 text-[9px] text-slate-500 dark:text-slate-400">
+                                    Preview: {getAutoCaption('table', activeSection, sec.id, sec.title)}
+                                  </p>
+                                </div>
                                
                                <div className="flex bg-slate-100 dark:bg-slate-950 p-0.5 gap-0.5 rounded text-[9px] font-bold mb-2">
                                  <button 
@@ -6290,6 +6416,7 @@ export default function Index() {
                                        >
                                          <option value="none">Tanpa Nomor</option>
                                          <option value="bab_prefix_dot">Bertingkat sesuai heading (1.1)</option>
+                                         <option value="bab_roman_prefix_dot">Bertingkat Romawi BAB (I.1 / II.1)</option>
                                          <option value="bab_prefix_double_dot">Bertingkat sesuai heading (1.1.1 / 1.1.1.1)</option>
                                          <option value="arabic_dot">1. 2. 3.</option>
                                          <option value="arabic_paren">1) 2) 3)</option>
@@ -6565,6 +6692,9 @@ export default function Index() {
                   editingElementData={editingElementData}
                   tables={getAllTables()}
                   figures={getAllFigures()}
+                  getAutoCaption={getAutoCaption}
+                  getAutoCaptionPrefix={getAutoCaptionPrefix}
+                  stripCaptionNumberPrefix={stripCaptionNumberPrefix}
                   onTableInputChange={setTableInput}
                   onFigureInputChange={setFigureInput}
                   onEditingElementIdChange={setEditingElementId}
@@ -6580,14 +6710,32 @@ export default function Index() {
             )}
             <AiAssistantPanel
               show={activeTab === 'asisten'}
+              mode="assistant"
               apiKey={apiKey}
               aiInputs={aiInputs}
               loadingSuggestions={loadingSuggestions}
               suggestedTitles={suggestedTitles}
-              onApiKeyChange={updateApiKey}
+              onApiKeyChange={handleApiKeyChange}
               onAiInputsChange={setAiInputs}
               onFetchTitleRecommendations={fetchTitleRecommendations}
               onApplySuggestedTitle={applySuggestedTitle}
+            />
+            <AiAssistantPanel
+              show={activeTab === 'chat'}
+              mode="chat"
+              apiKey={apiKey}
+              aiInputs={aiInputs}
+              loadingSuggestions={loadingSuggestions}
+              suggestedTitles={suggestedTitles}
+              chatMessages={chatMessages}
+              chatInput={chatInput}
+              chatLoading={chatLoading}
+              onApiKeyChange={handleApiKeyChange}
+              onAiInputsChange={setAiInputs}
+              onFetchTitleRecommendations={fetchTitleRecommendations}
+              onApplySuggestedTitle={applySuggestedTitle}
+              onChatInputChange={setChatInput}
+              onSendChatMessage={sendChatMessage}
             />
             <BibliographyPanel
               show={activeTab === 'referensi'}
@@ -6597,6 +6745,8 @@ export default function Index() {
               scholarYearEnd={scholarYearEnd}
               scholarResults={scholarResults}
               refInput={refInput}
+              manualReferencesText={manualReferencesText}
+              detectedCitations={detectedCitations}
               references={references}
               refStyle={refStyle}
               onScholarQueryChange={setScholarQuery}
@@ -6605,9 +6755,13 @@ export default function Index() {
               onScholarSearch={handleScholarSearch}
               onImportCitation={importCitation}
               onRefInputChange={setRefInput}
+              onManualReferencesTextChange={setManualReferencesText}
               onAddReference={handleAddReference}
+              onImportManualReferences={importManualReferences}
+              onDetectCitations={detectCitationsFromDocument}
+              onGenerateReferencesFromDetectedCitations={generateReferencesFromDetectedCitations}
               onRefStyleChange={setRefStyle}
-              onReferencesChange={setReferences}
+              onReferencesChange={updateReferences}
             />
           </div>
           <SidebarFooter
@@ -6731,250 +6885,199 @@ export default function Index() {
               
               {/* PAGE 1: COVER Sampul */}
               <div className={`a4-page relative ${getPagePrintClass('cover')}`} id="page-cover">
-                <div className="page-content flex flex-col items-center justify-start h-full border border-dashed border-indigo-500/10 w-full">
-                  <div className="w-full flex flex-col items-center">
-                    {coverElements.map((el) => {
-                      if (el.type === 'spacing') {
-                        return <div key={el.id} style={{ height: el.height || '1cm' }} className="w-full" />;
-                      }
-                      if (el.type === 'logo') {
-                        return (
-                          <div key={el.id} className="flex justify-center text-center w-full my-2" align="center">
-                            {el.logoType === 'custom' && el.logoData ? (
-                              <img src={el.logoData} className="max-h-[5.5cm] max-w-[5.5cm] object-contain" alt="Logo Kustom" />
-                            ) : (
-                              <div className="w-[5.5cm] h-[5.5cm] flex items-center justify-center bg-indigo-50/50 rounded-full border border-indigo-200">
-                                <GraduationCap className="w-20 h-20 text-indigo-500" />
-                              </div>
-                            )}
-                          </div>
-                        );
-                      }
-
-                      // Styling for text, title, label
-                      const textStyle = {
-                        fontSize: el.fontSize || '12pt',
-                        fontWeight: el.bold ? 'bold' : 'normal',
-                        fontStyle: el.italic ? 'italic' : 'normal',
-                        textDecoration: el.underline ? 'underline' : 'none',
-                        textTransform: el.uppercase ? 'uppercase' : 'none',
-                        lineHeight: '1.5',
-                        margin: '0',
-                        padding: '0',
-                        fontFamily: 'var(--doc-font-family)'
-                      };
-
-                      if (el.type === 'title') {
-                        return (
-                          <h1 
-                            key={el.id} 
-                            style={textStyle} 
-                            className="w-full max-w-[15.5cm] mx-auto text-center font-bold tracking-wide break-words"
-                          >
-                            {el.value}
-                          </h1>
-                        );
-                      }
-
-                      return (
-                        <p 
-                          key={el.id} 
-                          style={textStyle} 
-                          className="w-full text-center break-words"
-                        >
-                          {el.value}
-                        </p>
-                      );
-                    })}
-                  </div>
-                </div>
+                <CoverPage coverElements={coverElements} />
               </div>
-
               {/* PAGE OPTIONAL: PERSATUJUAN */}
               {layout.showPersetujuan && (
                 <div className={`a4-page relative ${getPagePrintClass('persetujuan')}`} id="page-persetujuan">
-                  <div className="page-content border border-dashed border-indigo-500/10 flex flex-col justify-between text-justify" style={{ textIndent: 0 }}>
-                    <div className="text-center">
-                      <h1 className="text-[14pt] font-bold uppercase leading-normal tracking-wide">HALAMAN PERSETUJUAN</h1>
-                    </div>
-                    
-                    <div className="my-6 text-[12pt] leading-relaxed">
-                      <p className="mb-4">
-                        Skripsi dengan judul:
-                      </p>
-                      <p className="font-bold uppercase text-center my-4 px-4 leading-normal">
-                        "{cover.title}"
-                      </p>
-                      <p className="mb-4">
-                        yang disusun dan diajukan oleh:
-                      </p>
-                      <table className="w-auto border-none mx-auto my-4 text-[12pt]">
-                        <tbody>
-                          <tr className="border-none">
-                            <td className="border-none p-1 text-left font-semibold">Nama</td>
-                            <td className="border-none p-1 text-center font-semibold">:</td>
-                            <td className="border-none p-1 text-left font-bold uppercase">{cover.author}</td>
-                          </tr>
-                          <tr className="border-none">
-                            <td className="border-none p-1 text-left font-semibold">NIM</td>
-                            <td className="border-none p-1 text-center font-semibold">:</td>
-                            <td className="border-none p-1 text-left">{cover.nim}</td>
-                          </tr>
-                          <tr className="border-none">
-                            <td className="border-none p-1 text-left font-semibold">Program Studi</td>
-                            <td className="border-none p-1 text-center font-semibold">:</td>
-                            <td className="border-none p-1 text-left">{cover.prodi}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <p className="mt-4">
-                        telah disetujui oleh Dosen Pembimbing untuk diujikan pada Sidang Skripsi Program Studi {cover.prodi}, Fakultas {cover.fakultas}, {cover.univ}.
-                      </p>
+                  <div className="page-content border border-dashed border-indigo-500/10 text-[12pt]" style={{ textIndent: 0 }}>
+                    <div className="text-center font-bold uppercase leading-normal">
+                      <h1 className="m-0 text-[12pt] font-bold">LEMBAR PERSETUJUAN</h1>
+                      <p className="m-0 text-[12pt] font-bold">LAPORAN TUGAS AKHIR</p>
                     </div>
 
-                    <div className="mt-6 text-[12pt]">
-                      <p className="text-right mb-8">{cover.city || 'Jakarta'}, {new Date().toLocaleDateString('id-ID', {day: 'numeric', month: 'long', year: 'numeric'})}</p>
-                      <div className="flex justify-between px-8">
-                        <div className="text-center flex flex-col justify-between h-20">
-                          <p>Dosen Pembimbing I,</p>
-                          <div>
-                            <p className="font-bold underline">Prof. Dr. Ir. H. Aditama, M.T.</p>
-                            <p className="text-xs">NIDN. 0412038401</p>
-                          </div>
-                        </div>
-                        <div className="text-center flex flex-col justify-between h-20">
-                          <p>Dosen Pembimbing II,</p>
-                          <div>
-                            <p className="font-bold underline">Siti Rahmawati, S.Kom., M.Cs.</p>
-                            <p className="text-xs">NIDN. 0418099102</p>
-                          </div>
-                        </div>
+                    <table className="mt-[1.25cm] w-full border-none text-[12pt] leading-normal">
+                      <tbody>
+                        <tr className="border-none align-top">
+                          <td className="w-[2.1cm] border-none py-0.5 pr-1 text-left">Nama</td>
+                          <td className="w-[0.35cm] border-none py-0.5 text-center">:</td>
+                          <td className="border-none py-0.5 pl-1 text-left">{cover.author || 'Nama Mahasiswa'}</td>
+                        </tr>
+                        <tr className="border-none align-top">
+                          <td className="border-none py-0.5 pr-1 text-left">NPM</td>
+                          <td className="border-none py-0.5 text-center">:</td>
+                          <td className="border-none py-0.5 pl-1 text-left">{cover.nim || 'NPM Mahasiswa'}</td>
+                        </tr>
+                        <tr className="border-none align-top">
+                          <td className="border-none py-0.5 pr-1 text-left">Jurusan</td>
+                          <td className="border-none py-0.5 text-center">:</td>
+                          <td className="border-none py-0.5 pl-1 text-left">{cover.prodi || 'Teknik Informatika'}</td>
+                        </tr>
+                        <tr className="border-none align-top">
+                          <td className="border-none py-0.5 pr-1 text-left italic">Judul</td>
+                          <td className="border-none py-0.5 text-center">:</td>
+                          <td className="border-none py-0.5 pl-1 text-left italic">{cover.title || 'Judul Penelitian Tugas Akhir Mahasiswa'}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+
+                    <p className="mt-[1.25cm] text-justify text-[12pt] leading-[2]" style={{ textIndent: '1.25cm' }}>
+                      Telah disetujui untuk disidangkan dalam Sidang Tugas Akhir pada Program Sarjana Strata-1 (S1), Program Studi {cover.prodi || 'Teknik Informatika'}, {cover.fakultas || 'Fakultas Teknik'} {cover.univ || 'Universitas Suryakancana'}.
+                    </p>
+
+                    <p className="mt-[0.8cm] text-right text-[12pt]">
+                      {cover.city || 'Cianjur'}, {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
+                    </p>
+
+                    <div className="mt-[3cm] text-center text-[12pt]">
+                      <p className="m-0">Pembimbing Tugas Akhir</p>
+                      <div className="mt-[2.8cm]">
+                        <p className="m-0 font-bold underline">(Nama Dosen Pembimbing beserta gelar)</p>
+                        <p className="m-0 mt-3 font-bold">NIDN. 1111111111</p>
                       </div>
                     </div>
                   </div>
                   <div className={getPageNumberClass('persetujuan')}>{getPageNumber('persetujuan')}</div>
                 </div>
               )}
-
               {/* PAGE OPTIONAL: PENGESAHAN */}
               {layout.showPengesahan && (
                 <div className={`a4-page relative ${getPagePrintClass('pengesahan')}`} id="page-pengesahan">
-                  <div className="page-content border border-dashed border-indigo-500/10 flex flex-col justify-between text-justify" style={{ textIndent: 0 }}>
-                    <div className="text-center">
-                      <h1 className="text-[14pt] font-bold uppercase leading-normal tracking-wide">HALAMAN PENGESAHAN</h1>
+                  <div className="page-content border border-dashed border-indigo-500/10 text-[12pt]" style={{ textIndent: 0 }}>
+                    <div className="text-center font-bold uppercase leading-normal">
+                      <h1 className="m-0 text-[12pt] font-bold">LEMBAR PENGESAHAN</h1>
+                      <p className="m-0 text-[12pt] font-bold">LAPORAN TUGAS AKHIR</p>
                     </div>
 
-                    <div className="my-4 text-[12pt] leading-relaxed">
-                      <p className="mb-2">
-                        Skripsi oleh:
-                      </p>
-                      <table className="w-auto border-none mx-auto my-2 text-[12pt]">
+                    <table className="mt-[0.85cm] w-full border-none text-[12pt] leading-normal">
+                      <tbody>
+                        <tr className="border-none align-top">
+                          <td className="w-[2.1cm] border-none py-0.5 pr-1 text-left">Nama</td>
+                          <td className="w-[0.35cm] border-none py-0.5 text-center">:</td>
+                          <td className="border-none py-0.5 pl-1 text-left">{cover.author || 'Nama Mahasiswa'}</td>
+                        </tr>
+                        <tr className="border-none align-top">
+                          <td className="border-none py-0.5 pr-1 text-left">NPM</td>
+                          <td className="border-none py-0.5 text-center">:</td>
+                          <td className="border-none py-0.5 pl-1 text-left">{cover.nim || 'NPM Mahasiswa'}</td>
+                        </tr>
+                        <tr className="border-none align-top">
+                          <td className="border-none py-0.5 pr-1 text-left">Jurusan</td>
+                          <td className="border-none py-0.5 text-center">:</td>
+                          <td className="border-none py-0.5 pl-1 text-left">{cover.prodi || 'Teknik Informatika'}</td>
+                        </tr>
+                        <tr className="border-none align-top">
+                          <td className="border-none py-0.5 pr-1 text-left">Judul</td>
+                          <td className="border-none py-0.5 text-center">:</td>
+                          <td className="border-none py-0.5 pl-1 text-left">{cover.title || 'Judul Penelitian Tugas Akhir Mahasiswa'}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+
+                    <p className="mt-[0.85cm] text-justify text-[12pt] leading-[1.75]" style={{ textIndent: '1.25cm' }}>
+                      Telah disidangkan dan dinyatakan Lulus Sidang Tugas Akhir pada Program Sarjana Strata-1 (S1), Program Studi {cover.prodi || 'Teknik Informatika'} {cover.fakultas || 'Fakultas Teknik'} {cover.univ || 'Universitas Suryakancana'} pada tanggal dd Month Year.
+                    </p>
+
+                    <div className="mt-[0.55cm] grid grid-cols-[1fr_4.1cm] gap-x-[1cm] text-center text-[12pt]">
+                      <div>
+                        <p className="m-0">Tim Penguji</p>
+                        <p className="m-0 mt-2">Nama Dosen Sidang Tugas Akhir</p>
+                      </div>
+                      <p className="m-0 mt-[0.35cm]">Tanda Tangan</p>
+                    </div>
+
+                    <div className="mt-[0.55cm] text-[12pt]">
+                      <p className="m-0">Tim Penguji:</p>
+                      <table className="mt-1 w-full border-none text-[12pt] leading-normal">
                         <tbody>
-                          <tr className="border-none">
-                            <td className="border-none p-1 text-left font-semibold">Nama</td>
-                            <td className="border-none p-1 text-center font-semibold">:</td>
-                            <td className="border-none p-1 text-left font-bold uppercase">{cover.author}</td>
+                          <tr className="border-none align-top">
+                            <td className="w-[0.45cm] border-none py-0.5 pr-1 text-right">1.</td>
+                            <td className="border-none py-0.5 pl-1 text-left">
+                              <p className="m-0">Ketua Sidang</p>
+                              <p className="m-0 mt-1">Nama Pembimbing beserta gelar</p>
+                            </td>
+                            <td className="w-[4.1cm] border-none pt-[0.55cm] text-center"><div className="border-b border-black" /></td>
                           </tr>
-                          <tr className="border-none">
-                            <td className="border-none p-1 text-left font-semibold">NIM</td>
-                            <td className="border-none p-1 text-center font-semibold">:</td>
-                            <td className="border-none p-1 text-left">{cover.nim}</td>
+                          <tr className="border-none align-top">
+                            <td className="border-none py-0.5 pr-1 text-right">2.</td>
+                            <td className="border-none py-0.5 pl-1 text-left">
+                              <p className="m-0">Anggota Penguji 1</p>
+                              <p className="m-0 mt-1">Nama Penguji 1 beserta gelar</p>
+                            </td>
+                            <td className="border-none pt-[0.55cm] text-center"><div className="border-b border-black" /></td>
+                          </tr>
+                          <tr className="border-none align-top">
+                            <td className="border-none py-0.5 pr-1 text-right">3.</td>
+                            <td className="border-none py-0.5 pl-1 text-left">
+                              <p className="m-0">Anggota Penguji 2</p>
+                              <p className="m-0 mt-1">Nama Penguji 2 beserta gelar</p>
+                            </td>
+                            <td className="border-none pt-[0.55cm] text-center"><div className="border-b border-black" /></td>
                           </tr>
                         </tbody>
                       </table>
-                      <p className="my-2">
-                        dengan judul:
-                      </p>
-                      <p className="font-bold uppercase text-center my-2 px-4 leading-normal">
-                        "{cover.title}"
-                      </p>
-                      <p className="mt-2">
-                        telah dipertahankan di depan Dewan Penguji Sidang Skripsi pada tanggal {new Date().toLocaleDateString('id-ID', {day: 'numeric', month: 'long', year: 'numeric'})} dan dinyatakan telah memenuhi syarat kelulusan.
-                      </p>
                     </div>
 
-                    <div className="text-[12pt]">
-                      <p className="font-bold mb-2">Dewan Penguji:</p>
-                      <div className="space-y-4">
-                        <div className="flex justify-between items-center">
-                          <p>1. Prof. Dr. Ir. H. Aditama, M.T. (Ketua)</p>
-                          <p className="w-48 border-b border-black text-center text-xs text-slate-400 pb-1">Tanda Tangan</p>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <p>2. Ir. Hermawan, M.T. (Anggota)</p>
-                          <p className="w-48 border-b border-black text-center text-xs text-slate-400 pb-1">Tanda Tangan</p>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <p>3. Dr. Diana Lestari, M.Si. (Anggota)</p>
-                          <p className="w-48 border-b border-black text-center text-xs text-slate-400 pb-1">Tanda Tangan</p>
-                        </div>
-                      </div>
-                      
-                      <div className="mt-6 pt-2 border-t border-dashed border-slate-300 flex justify-between">
-                        <div className="text-center flex flex-col justify-between h-16">
-                          <p>Mengetahui,<br />Dekan Fakultas</p>
-                          <p className="font-bold underline text-xs">Prof. Ir. Sudjatmiko, Ph.D.</p>
-                        </div>
-                        <div className="text-center flex flex-col justify-between h-16">
-                          <p>Menyetujui,<br />Ketua Program Studi</p>
-                          <p className="font-bold underline text-xs">{cover.prodi}</p>
-                        </div>
+                    <div className="mt-[0.55cm] text-center text-[12pt]">
+                      <p className="m-0">Mengetahui,</p>
+                      <p className="m-0 mt-2">Ketua Program Studi</p>
+                      <p className="m-0 mt-2">Teknik Informatika</p>
+                      <div className="mt-[0.75cm]">
+                        <p className="m-0">(M. Kany Legiawan, S.T.,M.Kom)</p>
+                        <p className="m-0 mt-2">NIK. 4103005039</p>
                       </div>
                     </div>
                   </div>
                   <div className={getPageNumberClass('pengesahan')}>{getPageNumber('pengesahan')}</div>
                 </div>
               )}
-
               {/* PAGE OPTIONAL: PERNYATAAN */}
               {layout.showPernyataan && (
                 <div className={`a4-page relative ${getPagePrintClass('pernyataan')}`} id="page-pernyataan">
-                  <div className="page-content border border-dashed border-indigo-500/10 flex flex-col justify-between text-justify" style={{ textIndent: 0 }}>
-                    <div className="text-center">
-                      <h1 className="text-[14pt] font-bold uppercase leading-normal tracking-wide">PERNYATAAN ORISINALITAS</h1>
+                  <div className="page-content border border-black flex flex-col text-justify px-[0.5cm] py-[0.55cm]" style={{ textIndent: 0 }}>
+                    <div className="text-center text-[12pt] font-bold uppercase leading-normal">
+                      <h1 className="m-0">LEMBAR PERNYATAAN KEASLIAN</h1>
+                      <h2 className="m-0 mt-2 text-[12pt] font-bold">LAPORAN TUGAS AKHIR</h2>
                     </div>
 
-                    <div className="my-6 text-[12pt] leading-relaxed space-y-4">
-                      <p>Saya yang bertanda tangan di bawah ini:</p>
-                      <table className="w-auto border-none ml-8 text-[12pt]">
+                    <div className="mt-[0.85cm] text-[12pt] leading-relaxed">
+                      <table className="w-auto border-none text-[12pt]">
                         <tbody>
                           <tr className="border-none">
-                            <td className="border-none p-1 text-left font-semibold">Nama</td>
-                            <td className="border-none p-1 text-center font-semibold">:</td>
-                            <td className="border-none p-1 text-left font-bold uppercase">{cover.author}</td>
+                            <td className="border-none py-1 pr-8 text-left">Nama</td>
+                            <td className="border-none py-1 pr-2 text-center">:</td>
+                            <td className="border-none py-1 text-left">{cover.author || 'Nama Mahasiswa'}</td>
                           </tr>
                           <tr className="border-none">
-                            <td className="border-none p-1 text-left font-semibold">NIM</td>
-                            <td className="border-none p-1 text-center font-semibold">:</td>
-                            <td className="border-none p-1 text-left">{cover.nim}</td>
+                            <td className="border-none py-1 pr-8 text-left">NPM</td>
+                            <td className="border-none py-1 pr-2 text-center">:</td>
+                            <td className="border-none py-1 text-left">{cover.nim || 'NPM Mahasiswa'}</td>
                           </tr>
                           <tr className="border-none">
-                            <td className="border-none p-1 text-left font-semibold">Program Studi</td>
-                            <td className="border-none p-1 text-center font-semibold">:</td>
-                            <td className="border-none p-1 text-left">{cover.prodi}</td>
+                            <td className="border-none py-1 pr-8 text-left">Jurusan</td>
+                            <td className="border-none py-1 pr-2 text-center">:</td>
+                            <td className="border-none py-1 text-left">{cover.prodi || 'Teknik Informatika'}</td>
+                          </tr>
+                          <tr className="border-none align-top">
+                            <td className="border-none py-1 pr-8 text-left">Judul</td>
+                            <td className="border-none py-1 pr-2 text-center">:</td>
+                            <td className="border-none py-1 text-left">{cover.title || 'Judul Penelitian Tugas Akhir Mahasiswa'}</td>
                           </tr>
                         </tbody>
                       </table>
 
-                      <p className="text-justify">
-                        Menyatakan dengan sebenarnya bahwa skripsi saya yang berjudul:
-                      </p>
-                      <p className="font-bold uppercase text-center px-4 leading-normal">
-                        "{cover.title}"
-                      </p>
-                      <p className="text-justify">
-                        adalah sepenuhnya hasil karya saya sendiri. Di dalam dokumen ini tidak terdapat tulisan atau pendapat orang lain tanpa rujukan yang sah. Apabila pernyataan ini terbukti tidak benar, saya bersedia menerima sanksi akademis sesuai peraturan yang berlaku.
+                      <p className="mt-[1.55cm] text-justify leading-[2]" style={{ textIndent: '1.25cm' }}>
+                        Dengan ini saya menyatakan bahwa dalam laporan penelitian ini tidak terdapat karya yang pernah diajukan untuk memperoleh kelulusan gelar kesarjanaan di suatu Perguruan Tinggi, dan sepanjang pengetahuan saya juga tidak terdapat karya atau pendapat yang pernah ditulis atau diterbitkan oleh orang lain, kecuali secara tertulis diacu dalam naskah ini dan disebutkan dalam daftar pustaka.
                       </p>
                     </div>
 
-                    <div className="mt-8 text-[12pt] flex flex-col items-end">
+                    <div className="mt-auto text-[12pt] flex flex-col items-end">
                       <div className="text-center w-64">
-                        <p className="mb-2">{cover.city || 'Jakarta'}, {new Date().toLocaleDateString('id-ID', {day: 'numeric', month: 'long', year: 'numeric'})}</p>
-                        <p className="mb-12">Yang membuat pernyataan,</p>
-                        <div className="relative inline-block">
-                          <span className="absolute -left-12 top-0 border border-slate-400 text-[8pt] text-slate-400 px-2 py-1 rotate-12 bg-white">Materai Rp 10.000</span>
-                          <p className="font-bold underline uppercase">{cover.author}</p>
-                          <p className="text-xs">NIM. {cover.nim}</p>
+                        <p className="mb-8">{cover.city || 'Cianjur'}, {new Date().toLocaleDateString('id-ID', {day: 'numeric', month: 'long', year: 'numeric'})}</p>
+                        <p className="mb-14">Materai</p>
+                        <div>
+                          <p className="font-bold underline">({cover.author || 'Nama Mahasiswa'})</p>
+                          <p className="text-[12pt] mt-3">NPM. {cover.nim || '552010000'}</p>
                         </div>
                       </div>
                     </div>
@@ -6986,18 +7089,28 @@ export default function Index() {
               {/* PAGE OPTIONAL: ABSTRAK INDO */}
               {layout.showAbstractIndo && (
                 <div className={`a4-page relative ${getPagePrintClass('abstrak-indo')}`} id="page-abstrak-indo">
-                  <div className="page-content border border-dashed border-indigo-500/10 flex flex-col justify-between text-justify" style={{ textIndent: 0 }}>
+                  <div className="page-content border border-black flex flex-col text-justify px-[0.5cm] py-[0.55cm]" style={{ textIndent: 0 }}>
                     <div>
-                      <h1 className="text-[14pt] font-bold text-center uppercase mb-6">ABSTRAK</h1>
+                      <div className="text-center text-[12pt] font-bold leading-normal">
+                        <h1 className="m-0 uppercase">{cover.title || 'Judul Penelitian Tugas Akhir Mahasiswa'}</h1>
+                        <div className="mt-[0.65cm]">
+                          <p className="m-0">{cover.author || 'Nama Mahasiswa'}</p>
+                          <p className="m-0">{cover.nim || 'NPM Mahasiswa'}</p>
+                          <p className="m-0">{cover.prodi || 'Teknik Informatika'}</p>
+                          <p className="m-0">{cover.univ || 'Universitas Suryakancana'}</p>
+                          <p className="m-0">{cover.email || 'email@mahasiswa'}</p>
+                        </div>
+                        <h2 className="m-0 mt-[0.65cm] text-[12pt] font-bold uppercase">ABSTRAK</h2>
+                      </div>
 
-                      <div className="text-[11pt] text-justify leading-relaxed" style={{ textIndent: 'var(--doc-text-indent, 1.25cm)' }}>
+                      <div className="mt-[0.75cm] text-[12pt] text-justify leading-[1.45]" style={{ textIndent: '1.25cm' }}>
                         <p className="paragraph-content" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(abstrakIndo) }} />
                       </div>
                     </div>
 
-                    <div className="text-[11pt] font-semibold mt-4" style={{ textIndent: 0 }}>
+                    <div className="text-[12pt] font-bold mt-[0.65cm]" style={{ textIndent: 0 }}>
                       <span>Kata Kunci: </span>
-                      <span className="font-normal italic" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(abstrakIndoKeywords) }} />
+                      <span className="font-normal" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(abstrakIndoKeywords) }} />
                     </div>
                   </div>
                   <div className={getPageNumberClass('abstrak-indo')}>{getPageNumber('abstrak-indo')}</div>
@@ -7007,18 +7120,28 @@ export default function Index() {
               {/* PAGE OPTIONAL: ABSTRAK ENG */}
               {layout.showAbstractEng && (
                 <div className={`a4-page relative ${getPagePrintClass('abstrak-eng')}`} id="page-abstrak-eng">
-                  <div className="page-content border border-dashed border-indigo-500/10 flex flex-col justify-between text-justify" style={{ textIndent: 0 }}>
+                  <div className="page-content border border-black flex flex-col text-justify px-[0.5cm] py-[0.55cm]" style={{ textIndent: 0 }}>
                     <div>
-                      <h1 className="text-[14pt] font-bold text-center uppercase mb-6 italic">ABSTRACT</h1>
+                      <div className="text-center text-[12pt] font-bold leading-normal">
+                        <h1 className="m-0 uppercase">{cover.title || 'Judul Penelitian Tugas Akhir Mahasiswa'}</h1>
+                        <div className="mt-[0.65cm]">
+                          <p className="m-0">{cover.author || 'Nama Mahasiswa'}</p>
+                          <p className="m-0">{cover.nim || 'NPM Mahasiswa'}</p>
+                          <p className="m-0">{cover.prodi || 'Teknik Informatika'}</p>
+                          <p className="m-0">{cover.univ || 'Universitas Suryakancana'}</p>
+                          <p className="m-0">{cover.email || 'email@mahasiswa'}</p>
+                        </div>
+                        <h2 className="m-0 mt-[0.65cm] text-[12pt] font-bold uppercase">ABSTRACT</h2>
+                      </div>
 
-                      <div className="text-[11pt] text-justify leading-relaxed italic" style={{ textIndent: 'var(--doc-text-indent, 1.25cm)' }}>
+                      <div className="mt-[0.75cm] text-[12pt] text-justify leading-[1.45]" style={{ textIndent: '1.25cm' }}>
                         <p className="paragraph-content">{abstrakEng}</p>
                       </div>
                     </div>
 
-                    <div className="text-[11pt] font-semibold mt-4" style={{ textIndent: 0 }}>
+                    <div className="text-[12pt] font-bold mt-[0.65cm]" style={{ textIndent: 0 }}>
                       <span>Keywords: </span>
-                      <span className="font-normal italic">{abstrakEngKeywords}</span>
+                      <span className="font-normal">{abstrakEngKeywords}</span>
                     </div>
                   </div>
                   <div className={getPageNumberClass('abstrak-eng')}>{getPageNumber('abstrak-eng')}</div>
@@ -7153,7 +7276,7 @@ export default function Index() {
               })}
 
               {/* DYNAMIC CHAPTER PAGES (BAB I to V) */}
-              {['bab1', 'bab2', 'bab3', 'bab4', 'bab5'].flatMap((babKey) => {
+              {getRenderableBabKeys().flatMap((babKey) => {
                 // In blank/outline mode, skip chapters that have no sections
                 if ((layout.blankMode || layout.hideEmptyChapters) && (!babSections[babKey] || babSections[babKey].length === 0)) return [];
                 const pages = getBabPagesMap()[babKey] || [];

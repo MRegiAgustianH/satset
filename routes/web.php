@@ -12,6 +12,7 @@ Route::get('/', [ThesisController::class, 'index'])->name('thesis.index');
 Route::prefix('thesis')->group(function () {
     Route::post('/recommend-titles', [ThesisController::class, 'recommendTitles'])->name('thesis.recommend_titles');
     Route::post('/generate', [ThesisController::class, 'generateSection'])->name('thesis.generate');
+    Route::post('/ai-chat', [ThesisController::class, 'aiChat'])->name('thesis.ai_chat');
     Route::post('/save', [ThesisController::class, 'saveDraft'])->name('thesis.save');
     Route::post('/save-chunk', [ThesisController::class, 'saveDraftChunk'])->name('thesis.save_chunk');
     Route::get('/list', [ThesisController::class, 'listDrafts'])->name('thesis.list');

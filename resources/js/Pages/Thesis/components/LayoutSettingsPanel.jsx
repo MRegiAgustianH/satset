@@ -44,7 +44,31 @@ export default function LayoutSettingsPanel({
       </div>
 
       <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
-        <h3 className="font-bold text-slate-400 mb-2 uppercase text-[10px]">Preset Format</h3>
+        <h3 className="font-bold text-slate-400 mb-2 uppercase text-[10px]">Preset Panduan Jurusan</h3>
+        <div className="grid grid-cols-1 gap-2">
+          <button
+            onClick={() => onApplyPreset('informatika')}
+            className={`w-full py-2 border rounded-lg text-center ${layout.preset === 'informatika' ? 'bg-indigo-500/10 border-indigo-500 text-indigo-500' : 'bg-white dark:bg-slate-950 border-slate-250'}`}
+          >
+            Teknik Informatika
+          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => onApplyPreset('sipil')}
+              className="py-2 border rounded-lg text-center bg-white dark:bg-slate-950 border-slate-250 text-slate-400"
+            >
+              Sipil <span className="text-[9px]">(segera)</span>
+            </button>
+            <button
+              onClick={() => onApplyPreset('industri')}
+              className={`py-2 border rounded-lg text-center ${layout.preset === 'industri' ? 'bg-indigo-500/10 border-indigo-500 text-indigo-500' : 'bg-white dark:bg-slate-950 border-slate-250 text-slate-700 dark:text-slate-350'}`}
+            >
+              Industri
+            </button>
+          </div>
+        </div>
+
+        <h3 className="font-bold text-slate-400 pt-2 mb-2 uppercase text-[10px]">Preset Umum</h3>
         <div className="flex gap-2">
           <button
             onClick={() => onApplyPreset('dikti')}

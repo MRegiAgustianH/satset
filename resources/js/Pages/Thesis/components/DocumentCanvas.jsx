@@ -364,13 +364,13 @@ export default function DocumentCanvas({
             </div>
           )}
 
-          <div style={{ width: scaledPageWidth }} onClick={onBackgroundClick}>
+          <div className="document-print-width" style={{ width: scaledPageWidth }} onClick={onBackgroundClick}>
             <div
-              className="origin-top-left transition-transform duration-200"
+              className="document-print-transform origin-top-left transition-transform duration-200"
               style={{ transform: `scale(${zoomScale})` }}
             >
               <div
-                className={`flex flex-col gap-8 pb-32 ${showRuler ? 'show-margin-guide' : ''}`}
+                className={`document-print-stack flex flex-col gap-8 pb-32 ${showRuler ? 'show-margin-guide' : ''}`}
                 style={{
                   '--doc-margin-top': `${layout.marginTop}cm`,
                   '--doc-margin-left': `${layout.marginLeft}cm`,

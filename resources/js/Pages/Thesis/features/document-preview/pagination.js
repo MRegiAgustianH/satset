@@ -23,35 +23,47 @@ export const getLineHeightPx = (layout) => {
 };
 
 export const estimateParagraphLines = (text, widthPx, layout, isList = false) => {
-  const words = String(text || '').split(/\s+/).filter(Boolean);
-  if (words.length === 0) return 1;
+  const rawLines = String(text || '').split('\n');
+  const logicalLines = rawLines.length > 0 ? rawLines : [''];
 
   const fontSizePx = getFontSizePx(layout.fontSize || '12pt');
-  const charWidth = fontSizePx * 0.46;
+  const charWidth = fontSizePx * 0.425;
   const textIndentPx = (!isList && layout.paragraphIndent === 'indented') ? 47 : 0;
-  const availableWidth = Math.max(1, isList ? widthPx - 32 : widthPx);
-  let lineWidth = Math.max(1, availableWidth - textIndentPx);
-  let lines = 1;
-  let currentWidth = 0;
+  const availableWidth = Math.max(1, isList ? widthPx - 42 : widthPx);
+  let totalLines = 0;
 
-  words.forEach((word, index) => {
-    const wordWidth = Math.max(charWidth, word.length * charWidth);
-    const spaceWidth = index === 0 || currentWidth === 0 ? 0 : charWidth;
-
-    if (currentWidth > 0 && currentWidth + spaceWidth + wordWidth > lineWidth) {
-      lines++;
-      currentWidth = wordWidth;
-      lineWidth = availableWidth;
+  logicalLines.forEach((line) => {
+    const words = String(line || '').split(/\s+/).filter(Boolean);
+    if (words.length === 0) {
+      totalLines += 1;
       return;
     }
 
-    currentWidth += spaceWidth + wordWidth;
+    let lineWidth = Math.max(1, availableWidth - textIndentPx);
+    let currentWidth = 0;
+    let lines = 1;
+
+    words.forEach((word, index) => {
+      const wordWidth = Math.max(charWidth, word.length * charWidth);
+      const spaceWidth = index === 0 || currentWidth === 0 ? 0 : charWidth;
+
+      if (currentWidth > 0 && currentWidth + spaceWidth + wordWidth > lineWidth) {
+        lines++;
+        currentWidth = wordWidth;
+        lineWidth = availableWidth;
+        return;
+      }
+
+      currentWidth += spaceWidth + wordWidth;
+    });
+
+    totalLines += lines;
   });
 
-  return lines;
+  return Math.max(1, totalLines);
 };
 
 export const estimateParagraphHeight = (text, widthPx, layout, isList = false) => {
   const lines = estimateParagraphLines(text, widthPx, layout, isList);
-  return (lines * getLineHeightPx(layout)) + 8;
+  return (lines * getLineHeightPx(layout)) + 6;
 };
