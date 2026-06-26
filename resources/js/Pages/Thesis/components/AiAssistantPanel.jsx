@@ -49,7 +49,7 @@ export default function AiAssistantPanel({
         <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
           Asisten memahami laporan lintas jurusan, dengan fokus teknik: Informatika, Sipil, Industri, dan bidang teknik terkait.
         </p>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <div>
             <label className="text-[9px] text-slate-400 mb-0.5 block">Fakultas</label>
             <input

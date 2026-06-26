@@ -20,7 +20,7 @@ const PAGE_WIDTH_CM = 21;
 const PAGE_HEIGHT_CM = 29.7;
 const DEFAULT_FIGURE_WIDTH_CM = 12;
 const DEFAULT_FIGURE_HEIGHT_CM = 8;
-const PAGE_BOTTOM_SAFETY_PX = 26;
+const PAGE_BOTTOM_SAFETY_PX = 72;
 
 const getFigureAspectRatio = (figure) => {
   const storedRatio = parseFloat(figure.imgAspectRatio);
@@ -66,12 +66,12 @@ const getCellText = (cell) => {
 const estimateTableRowHeight = (cells, layout, widthPx, columnCount) => {
   const safeColumnCount = Math.max(1, columnCount || cells.length || 1);
   const cellWidthPx = Math.max(36, (widthPx / safeColumnCount) + 10);
-  const lineHeightPx = Math.max(10, getFontSizePx(layout.fontSize || '12pt') * getLayoutNumber(layout.tableLineSpacing, 1) * 0.72);
+  const lineHeightPx = Math.max(10, getFontSizePx(layout.fontSize || '12pt') * getLayoutNumber(layout.tableLineSpacing, 1) * 0.78);
   const maxLines = Math.max(
     1,
     ...cells.map((cell) => estimateParagraphLines(getCellText(cell), cellWidthPx, layout, true))
   );
-  return (maxLines * lineHeightPx) + 4;
+  return (maxLines * lineHeightPx) + 8;
 };
 
 const estimateTableHeight = (el, layout) => {
@@ -79,10 +79,10 @@ const estimateTableHeight = (el, layout) => {
   const headers = Array.isArray(el.headers) ? el.headers : String(el.headers || '').split(',').map(text => text.trim()).filter(Boolean);
   const rows = Array.isArray(el.rows) ? el.rows : [];
   const columnCount = Math.max(headers.length, ...rows.map(row => Array.isArray(row) ? row.length : 1), 1);
-  const captionHeight = 16;
+  const captionHeight = 20;
   const headerHeight = estimateTableRowHeight(headers, layout, widthPx, columnCount);
   const bodyHeight = rows.reduce((total, row) => total + estimateTableRowHeight(Array.isArray(row) ? row : [row], layout, widthPx, columnCount), 0);
-  return captionHeight + headerHeight + bodyHeight + 4;
+  return captionHeight + headerHeight + bodyHeight + 12;
 };
 
 const estimateElementHeight = (el, layout) => {
@@ -106,7 +106,7 @@ const estimateElementHeight = (el, layout) => {
   }
 
   if (el.type === 'figure') {
-    return 16 + getFigureHeightPx(el, layout) + 25 + 40;
+    return 18 + getFigureHeightPx(el, layout) + 30 + 64;
   }
 
   if (el.type === 'equation') {
@@ -186,9 +186,9 @@ const buildBabSubElements = (babKey, rawSections) => {
               text: cleanedPart,
               paragraphIndex,
               textAlign: getParagraphAlignment(section, paragraphIndex),
-              firstLineIndentCm: section.firstLineIndentCm ?? null,
-              leftIndentCm: section.leftIndentCm ?? null,
-              rightIndentCm: section.rightIndentCm ?? null,
+              firstLineIndentCm: section.paragraphIndents?.[paragraphIndex]?.firstLineIndentCm ?? section.firstLineIndentCm ?? null,
+              leftIndentCm: section.paragraphIndents?.[paragraphIndex]?.leftIndentCm ?? section.leftIndentCm ?? null,
+              rightIndentCm: section.paragraphIndents?.[paragraphIndex]?.rightIndentCm ?? section.rightIndentCm ?? null,
             });
           }
           if (index < parts.length - 1) {
@@ -235,16 +235,23 @@ export const buildBabPagesMap = ({ sections, layout, inlineEditingBlockId }) => 
 
       const h = estimateElementHeight(el, layout);
 
+      if ((el.type === 'figure' || el.type === 'equation') && currentHeight + h > maxPageHeight && currentPage.length > 0) {
+        pages.push(currentPage);
+        currentPage = [];
+        resetPageHeight();
+        continue;
+      }
+
       if (el.type === 'table') {
         const isFirstPageOfTable = !el.isContinuation;
         const headers = Array.isArray(el.headers) ? el.headers : String(el.headers || '').split(',').map(text => text.trim()).filter(Boolean);
         const rows = Array.isArray(el.rows) ? el.rows : [];
         const columnCount = Math.max(headers.length, ...rows.map(row => Array.isArray(row) ? row.length : 1), 1);
         const widthPx = getContentWidthPx(layout);
-        const captionHeight = isFirstPageOfTable ? 16 : 0;
+        const captionHeight = isFirstPageOfTable ? 20 : 0;
         const headerHeight = estimateTableRowHeight(headers, layout, widthPx, columnCount);
         const rowHeights = rows.map(row => estimateTableRowHeight(Array.isArray(row) ? row : [row], layout, widthPx, columnCount));
-        const tableTailHeight = el.isContinuation ? 0 : 4;
+        const tableTailHeight = el.isContinuation ? 6 : 12;
         const hFresh = captionHeight + headerHeight + rowHeights.reduce((sum, rowHeight) => sum + rowHeight, 0) + tableTailHeight;
 
         if (currentHeight + h > maxPageHeight) {
@@ -298,6 +305,18 @@ export const buildBabPagesMap = ({ sections, layout, inlineEditingBlockId }) => 
       let totalH = h;
       if (el.type === 'heading' && subElements[elIdx + 1]) {
         totalH += estimateElementHeight(subElements[elIdx + 1], layout);
+      }
+
+      if (
+        el.type === 'paragraph' &&
+        currentPage.length > 0 &&
+        (currentPage[currentPage.length - 1]?.type === 'table' || currentPage[currentPage.length - 1]?.type === 'figure') &&
+        currentHeight + totalH > maxPageHeight - 36
+      ) {
+        pages.push(currentPage);
+        currentPage = [];
+        resetPageHeight();
+        continue;
       }
 
       if (el.type === 'paragraph' && el.blockId !== inlineEditingBlockId && currentHeight + h > maxPageHeight) {

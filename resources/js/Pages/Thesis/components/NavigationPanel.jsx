@@ -43,6 +43,8 @@ export default function NavigationPanel({
   getPageNumber,
   formatTocTitle,
   onActiveNavTabChange,
+  onNavigatePage,
+  onNavigateHeading,
 }) {
   if (!show) return null;
 
@@ -78,7 +80,10 @@ export default function NavigationPanel({
             return (
               <button
                 key={pageId}
-                onClick={() => scrollToElement(`page-${pageId}`)}
+                onClick={() => {
+                  if (onNavigatePage?.(pageId)) return;
+                  scrollToElement(`page-${pageId}`);
+                }}
                 className="w-full text-left p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-indigo-500 hover:bg-indigo-50/10 transition-all flex justify-between items-center text-[11px]"
               >
                 <span className="font-semibold text-slate-700 dark:text-slate-350 truncate">
@@ -106,6 +111,7 @@ export default function NavigationPanel({
               <button
                 key={index}
                 onClick={() => {
+                  if (onNavigateHeading?.(entry)) return;
                   const headingId = `heading-${entry.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
                   if (!scrollToElement(headingId)) {
                     scrollToElement(`page-${entry.pageId}`);

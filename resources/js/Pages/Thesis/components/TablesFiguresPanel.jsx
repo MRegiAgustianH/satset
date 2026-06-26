@@ -53,7 +53,7 @@ export default function TablesFiguresPanel({
             </p>
           )}
         </div>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <div>
             <label className="text-[9px] text-slate-400 block mb-0.5">Letak Bab</label>
             <select
@@ -151,7 +151,7 @@ export default function TablesFiguresPanel({
                       </p>
                     )}
                   </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div>
                     <label className="text-[8px] text-slate-400 block mb-0.5">Letak Bab</label>
                     <select

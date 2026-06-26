@@ -16,8 +16,24 @@ import {
   normalizeTableRows,
 } from './utils/table';
 import { createWordImportHandler } from './features/import-export/wordImport';
-import { downloadHtmlAsDocx } from './features/import-export/docxExport';
-import { buildCoverWordHtml, buildTableWordHtml as buildWordTableHtml } from './features/import-export/wordHtmlBuilders';
+import { exportWordDocument } from './features/import-export/wordExport';
+import {
+  getSectionParagraphIndent as resolveSectionParagraphIndent,
+  getSectionParagraphStyle as resolveSectionParagraphStyle,
+} from './features/document-preview/formatting';
+import {
+  getPageNumberClassName,
+  getPageNumberForPageId,
+  getPageNumberStyle,
+} from './features/document-preview/pageNumbering';
+import { computeVisiblePageIds } from './features/document-preview/pageSequence';
+import { buildTocEntries, paginateTocEntries } from './features/document-preview/toc';
+import { paginateReferences } from './features/document-preview/pagination';
+import {
+  formatPreviewParagraphs,
+  getPreviewHeadingStyle,
+  renderPreviewHeading,
+} from './features/document-preview/textRenderers';
 import {
   DEFAULT_EXPORT_SECTION_IDS,
   executePrintPdf,
@@ -768,36 +784,18 @@ export default function Index() {
     });
   };
 
-  const getSectionParagraphIndent = (section = {}) => {
-    const defaultFirstLineIndent = layout.paragraphIndent === 'indented' ? 1.25 : 0;
-    const leftIndent = Number.isFinite(parseFloat(section.leftIndentCm)) ? parseFloat(section.leftIndentCm) : 0;
-    const rightIndent = Number.isFinite(parseFloat(section.rightIndentCm)) ? parseFloat(section.rightIndentCm) : 0;
-    const firstLineIndent = Number.isFinite(parseFloat(section.firstLineIndentCm))
-      ? parseFloat(section.firstLineIndentCm)
-      : defaultFirstLineIndent;
+  const getSectionParagraphIndent = (section = {}) => resolveSectionParagraphIndent(section, layout);
 
-    return {
-      leftIndent,
-      rightIndent,
-      firstLineIndent,
-      textIndent: firstLineIndent - leftIndent,
-    };
-  };
-
-  const getSectionParagraphStyle = (section = {}) => {
-    const { leftIndent, rightIndent, textIndent } = getSectionParagraphIndent(section);
-    return {
-      marginLeft: `${leftIndent}cm`,
-      marginRight: `${rightIndent}cm`,
-      textIndent: `${textIndent}cm`,
-    };
-  };
+  const getSectionParagraphStyle = (section = {}) => resolveSectionParagraphStyle(section, layout);
 
   // ==========================================================================
   // INLINE EDITOR — WORD-LIKE FORMATTING HELPERS (Font / Paragraph / Clipboard)
   // Operate on the active <textarea> selection of a section's content.
   // ==========================================================================
-  const getActiveTextarea = (sec) => document.getElementById(`inline-textarea-${sec.id}`);
+  const getActiveTextarea = (sec) => (
+    document.getElementById(`inline-textarea-${sec.id}`) ||
+    document.getElementById(`textarea-content-${sec.id}`)
+  );
 
   const getTextParagraphRanges = (content = '') => {
     const ranges = [];
@@ -1269,10 +1267,8 @@ export default function Index() {
             return null;
           }
           
-          if (inlineEditingBlockId && el.blockId === inlineEditingBlockId) {
+          if (inlineEditingBlockId && el.blockId === inlineEditingBlockId && isFirstPageOfEditingBlock(el.blockId)) {
             // Render editing interface ONLY on the page where the block starts
-            if (!isFirstPageOfEditingBlock(el.blockId)) return null;
-            
             // Render editing interface ONLY for the first sub-element on this starting page
             const isFirstOfBlock = pageElements.findIndex(x => x.blockId === el.blockId) === idx;
             if (!isFirstOfBlock) return null;
@@ -1330,22 +1326,26 @@ export default function Index() {
                     id={`inline-textarea-${sec.id}`}
                     value={sec.content || ''}
                     onCommit={(text) => handleUpdateSectionField(babKey, sec.id, 'content', text)}
-                    placeholder="Tulis paragraf di sini... Gunakan [pagebreak] untuk membuat halaman baru."
-                    className="w-full bg-transparent text-black border-none focus:outline-none selection:bg-indigo-250/30"
-                    style={{
-                      fontFamily: 'var(--doc-font-family, "Times New Roman", Times, serif)',
-                      fontSize: 'var(--doc-font-size, 12pt)',
-                      lineHeight: 'var(--doc-line-spacing, 2.0)',
-                      textAlign: sec.textAlign || layout.textAlign || 'justify',
-                      margin: 0,
-                      textIndent: sectionParagraphStyle.textIndent,
-                      marginLeft: sectionParagraphStyle.marginLeft,
-                      marginRight: sectionParagraphStyle.marginRight,
-                      width: `calc(100% - ${sectionParagraphStyle.marginLeft} - ${sectionParagraphStyle.marginRight})`,
-                      resize: 'none',
-                      padding: 0,
-                      color: '#000000',
-                      overflow: 'hidden',
+                  placeholder="Tulis paragraf di sini... Gunakan [pagebreak] untuk membuat halaman baru."
+                  className="w-full rounded-md border border-indigo-200 bg-indigo-50/40 text-black focus:border-indigo-400 focus:bg-white focus:outline-none selection:bg-indigo-250/50"
+                  onClick={(event) => updateActiveParagraphFromTextarea(sec, event.currentTarget)}
+                  onKeyUp={(event) => updateActiveParagraphFromTextarea(sec, event.currentTarget)}
+                  onSelect={(event) => updateActiveParagraphFromTextarea(sec, event.currentTarget)}
+                  onFocus={(event) => updateActiveParagraphFromTextarea(sec, event.currentTarget)}
+                  style={{
+                    fontFamily: 'var(--doc-font-family, "Times New Roman", Times, serif)',
+                    fontSize: 'var(--doc-font-size, 12pt)',
+                    lineHeight: 'var(--doc-line-spacing, 2.0)',
+                    textAlign: sec.textAlign || layout.textAlign || 'justify',
+                    margin: 0,
+                    textIndent: sectionParagraphStyle.textIndent,
+                    marginLeft: sectionParagraphStyle.marginLeft,
+                    marginRight: sectionParagraphStyle.marginRight,
+                    width: `calc(100% - ${sectionParagraphStyle.marginLeft} - ${sectionParagraphStyle.marginRight})`,
+                    resize: 'none',
+                    padding: '6px 8px',
+                    color: '#000000',
+                    overflow: 'hidden',
                     }}
                     autoFocus={sec.headingLevel === 0}
                   />
@@ -1458,7 +1458,7 @@ export default function Index() {
             return (
               <div
                 key={idx}
-                className="mt-4 mb-6 leading-relaxed cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group relative"
+                className="academic-embedded-block leading-relaxed cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group relative"
                 style={{ textIndent: 0 }}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1469,10 +1469,10 @@ export default function Index() {
                 <span className="absolute -top-3 right-1 bg-indigo-600 text-white text-[8px] font-bold px-1 rounded opacity-0 group-hover:opacity-100 transition-opacity no-print">Klik untuk edit</span>
                 {/* Caption at the top of academic tables, styled by layout settings */}
                 <div 
-                  className="font-bold text-left mb-1" 
+                  className="academic-caption text-left mb-1" 
                   style={{
                     fontFamily: 'var(--doc-font-family)',
-                    fontSize: 'var(--doc-font-size, 12pt)'
+                    fontSize: '11pt'
                   }}
                   dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(tableCaption) }} 
                 />
@@ -1500,7 +1500,7 @@ export default function Index() {
                             colSpan={h.colSpan || 1}
                             rowSpan={h.rowSpan || 1}
                             style={headerStyle}
-                            className={`p-1.5 font-bold border border-black align-middle`} 
+                            className={`font-bold border border-black align-middle`} 
                             dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(h.text) }} 
                           />
                         );
@@ -1525,7 +1525,7 @@ export default function Index() {
                               colSpan={cell.colSpan || 1}
                               rowSpan={cell.rowSpan || 1}
                               style={cellStyle}
-                              className={`p-1.5 border border-black align-top text-black`} 
+                              className={`border border-black align-top text-black`} 
                               dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(cell.text) }} 
                             />
                           );
@@ -1539,11 +1539,12 @@ export default function Index() {
           }
           if (el.type === 'figure') {
             const figW = el.imgWidth || 12;
+            const maxFigureHeightCm = Math.max(4, 29.7 - (parseFloat(layout.marginTop) || 4) - (parseFloat(layout.marginBottom) || 3) - 3.2);
             const figureCaption = getAutoCaption('figure', babKey, el.blockId, el.title);
             return (
               <div
                 key={idx}
-                className="mt-4 mb-6 flex flex-col items-center justify-center gap-2 cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group relative"
+                className="academic-embedded-block flex flex-col items-center justify-center gap-2 cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group relative"
                 style={{ textIndent: 0 }}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1555,7 +1556,7 @@ export default function Index() {
                 {el.imageData ? (
                   /* Uploaded image: sized by user-defined width, height auto (preserves aspect ratio) */
                   <div className="relative group" style={{ width: `${figW}cm`, maxWidth: '100%' }}>
-                    <img src={el.imageData} alt={el.title} data-fig-id={el.blockId} style={{ width: '100%', height: 'auto', display: 'block' }} />
+                    <img src={el.imageData} alt={el.title} data-fig-id={el.blockId} style={{ width: '100%', maxHeight: `${maxFigureHeightCm}cm`, height: 'auto', objectFit: 'contain', display: 'block' }} />
                     <label className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white cursor-pointer transition-opacity text-xs font-sans no-print">
                       Ganti Gambar
                       <input type="file" accept="image/*" className="hidden" onChange={(e) => handleImageUploadForSection(babKey, el.blockId, e)} />
@@ -1581,10 +1582,10 @@ export default function Index() {
                 )}
                 {/* Caption at the bottom of academic figures, styled by layout settings */}
                 <div 
-                  className="font-bold text-center mt-1" 
+                  className="academic-caption text-center mt-1" 
                   style={{
                     fontFamily: 'var(--doc-font-family)',
-                    fontSize: 'var(--doc-font-size, 12pt)'
+                    fontSize: '11pt'
                   }}
                   dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(figureCaption) }} 
                 />
@@ -1602,13 +1603,13 @@ export default function Index() {
               return `(${babNum}.${eqIdx !== -1 ? eqIdx + 1 : 1})`;
             })();
             return (
-              <div key={idx} className="equation-block mt-4 mb-6 flex flex-col gap-1.5 relative cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group" style={{ textIndent: 0 }} onClick={(e) => { e.stopPropagation(); handleEditBlockInline(babKey, el.blockId); }}>
+              <div key={idx} className="equation-block academic-embedded-block flex flex-col gap-1.5 relative cursor-pointer hover:bg-indigo-500/5 p-1 rounded transition-colors group" style={{ textIndent: 0 }} onClick={(e) => { e.stopPropagation(); handleEditBlockInline(babKey, el.blockId); }}>
                 {/* Caption styled by layout settings */}
                 <div 
-                  className="font-bold text-left mb-1" 
+                  className="academic-caption text-left mb-1" 
                   style={{
                     fontFamily: 'var(--doc-font-family)',
-                    fontSize: 'var(--doc-font-size, 12pt)'
+                    fontSize: '11pt'
                   }}
                   dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(equationCaption) }} 
                 />
@@ -1628,10 +1629,10 @@ export default function Index() {
 
                 {descLines.length > 0 && (
                   <div 
-                    className="text-left leading-relaxed pl-8 mt-1.5"
+                    className="equation-description text-left"
                     style={{
                       fontFamily: 'var(--doc-font-family)',
-                      fontSize: 'var(--doc-font-size, 12pt)'
+                      fontSize: '11pt'
                     }}
                   >
                     <div className="font-bold mb-0.5">Keterangan:</div>
@@ -1678,7 +1679,7 @@ export default function Index() {
     const isGenerating = generatingSection === id;
     
     return (
-      <div className="grid grid-cols-2 gap-1">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
         <button 
           type="button"
           disabled={!!generatingSection}
@@ -2085,6 +2086,7 @@ export default function Index() {
   
   // Zoom & UI States
   const [zoomLevel, setZoomLevel] = useState(80);
+  const [canvasMode, setCanvasMode] = useState('write');
   const [showMarginGuide, setShowMarginGuide] = useState(false);
   const [activeTab, setActiveTab] = useState('layout');
   const [activeSection, setActiveSection] = useState('cover');
@@ -2108,12 +2110,24 @@ export default function Index() {
   const [inlineEditingBlockId, setInlineEditingBlockId] = useState(null);
   const [inlineEditingBabKey, setInlineEditingBabKey] = useState(null);
   const [focusedContentBlockId, setFocusedContentBlockId] = useState(null);
+  const [activeParagraphIndex, setActiveParagraphIndex] = useState(0);
+
+  const updateActiveParagraphFromTextarea = (sec, textarea) => {
+    if (!sec || !textarea) return;
+    const indexes = getSelectedParagraphIndexes(
+      textarea.value ?? sec.content ?? '',
+      textarea.selectionStart ?? 0,
+      textarea.selectionEnd ?? textarea.selectionStart ?? 0
+    );
+    setActiveParagraphIndex(indexes[0] ?? 0);
+  };
 
   const focusContentEditorBlock = (babKey, blockId) => {
     setSidebarVisible(true);
     setActiveSection(babKey);
     setActiveTab('konten');
     setFocusedContentBlockId(blockId);
+    setActiveParagraphIndex(0);
 
     window.setTimeout(() => {
       const blockElement = document.getElementById(`content-editor-block-${blockId}`);
@@ -2130,6 +2144,66 @@ export default function Index() {
         focusTarget.focus({ preventScroll: true });
       }
     }, 120);
+  };
+
+  const applyParagraphIndent = (babKey, sec, field, value) => {
+    const textarea = getActiveTextarea(sec);
+    const content = textarea?.value ?? sec.content ?? '';
+    const selectionStart = textarea?.selectionStart ?? 0;
+    const selectionEnd = textarea?.selectionEnd ?? selectionStart;
+    const targetIndexes = getSelectedParagraphIndexes(content, selectionStart, selectionEnd);
+    setActiveParagraphIndex(targetIndexes[0] ?? 0);
+
+    setBabSections(prev => {
+      const updatedList = prev[babKey].map(item => {
+        if (item.id !== sec.id) return item;
+
+        if (!targetIndexes.length) {
+          return { ...item, content, [field]: value };
+        }
+
+        const nextIndents = { ...(item.paragraphIndents || {}) };
+        targetIndexes.forEach((paragraphIndex) => {
+          nextIndents[paragraphIndex] = {
+            ...(nextIndents[paragraphIndex] || {}),
+            firstLineIndentCm: item.firstLineIndentCm ?? null,
+            leftIndentCm: item.leftIndentCm ?? null,
+            rightIndentCm: item.rightIndentCm ?? null,
+            [field]: value,
+          };
+        });
+
+        return {
+          ...item,
+          content,
+          paragraphIndents: nextIndents,
+        };
+      });
+      const updated = { ...prev, [babKey]: updatedList };
+      saveLocalDraft({ babSections: updated });
+      return updated;
+    });
+
+    if (textarea) {
+      setTimeout(() => {
+        textarea.focus();
+        textarea.setSelectionRange(selectionStart, selectionEnd);
+      }, 50);
+    }
+  };
+
+  const syncWritingBlockNavigation = (babKey, blockId) => {
+    setSidebarVisible(true);
+    setActiveSection(babKey);
+    setActiveTab('konten');
+    setFocusedContentBlockId(blockId);
+    setInlineEditingBlockId(blockId);
+    setInlineEditingBabKey(babKey);
+    setActiveParagraphIndex(0);
+
+    window.setTimeout(() => {
+      document.getElementById(`content-editor-block-${blockId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 80);
   };
 
   const handleEditBlockInline = (babKey, blockId) => {
@@ -2181,7 +2255,7 @@ export default function Index() {
   const getAllTables = (sections = babSections) => {
     const list = [];
     ['bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'bab6'].forEach(babKey => {
-      (sections[babKey] || []).forEach(sec => {
+      (Array.isArray(sections?.[babKey]) ? sections[babKey] : []).forEach(sec => {
         if (sec.type === 'table') {
           list.push({ ...sec, title: getAutoCaption('table', babKey, sec.id, sec.title, sections), bab: babKey });
         }
@@ -2193,7 +2267,7 @@ export default function Index() {
   const getAllFigures = (sections = babSections) => {
     const list = [];
     ['bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'bab6'].forEach(babKey => {
-      (sections[babKey] || []).forEach(sec => {
+      (Array.isArray(sections?.[babKey]) ? sections[babKey] : []).forEach(sec => {
         if (sec.type === 'figure') {
           list.push({ ...sec, title: getAutoCaption('figure', babKey, sec.id, sec.title, sections), bab: babKey });
         }
@@ -2205,7 +2279,7 @@ export default function Index() {
   const getAllEquations = (sections = babSections) => {
     const list = [];
     ['bab1', 'bab2', 'bab3', 'bab4', 'bab5', 'bab6'].forEach(babKey => {
-      (sections[babKey] || []).forEach(sec => {
+      (Array.isArray(sections?.[babKey]) ? sections[babKey] : []).forEach(sec => {
         if (sec.type === 'equation') {
           list.push({ ...sec, title: getAutoCaption('equation', babKey, sec.id, sec.title, sections), bab: babKey });
         }
@@ -2221,7 +2295,7 @@ export default function Index() {
 
   const usesRomanCaptionNumbering = (babKey, sections = babSections) => {
     if (layout.preset === 'industri') return true;
-    return (sections[babKey] || []).some((section) => String(section.numberingStyle || '').includes('roman'));
+    return (Array.isArray(sections?.[babKey]) ? sections[babKey] : []).some((section) => String(section.numberingStyle || '').includes('roman'));
   };
 
   const getCaptionBabNumber = (babKey, sections = babSections) => {
@@ -2236,7 +2310,7 @@ export default function Index() {
   };
 
   const getBlockOrdinalInBab = (babKey, blockId, type, sections = babSections) => {
-    const blocks = sections[babKey] || [];
+    const blocks = Array.isArray(sections?.[babKey]) ? sections[babKey] : [];
     const sameTypeBlocks = blocks.filter(section => section.type === type);
     const index = sameTypeBlocks.findIndex(section => section.id === blockId || section.blockId === blockId);
     if (String(blockId || '').startsWith('new_')) return sameTypeBlocks.length + 1;
@@ -2736,33 +2810,14 @@ export default function Index() {
     reader.readAsDataURL(file);
   };
 
-  const getHeadingStyle = (level) => {
-    const style = headingStyles[`h${level}`] || {};
-    return {
-      fontFamily: 'var(--doc-font-family)',
-      fontSize: level === 3 ? '12pt' : (style.fontSize || '12pt'),
-      fontWeight: style.fontWeight || 'bold',
-      fontStyle: level === 3 ? 'normal' : (style.fontStyle || 'normal'),
-      textAlign: style.textAlign || 'left',
-      textIndent: 0,
-    };
-  };
+  const getHeadingStyle = (level) => getPreviewHeadingStyle(level, headingStyles);
 
-  const renderHeading = (level, text) => {
-    const style = headingStyles[`h${level}`] || {};
-    const className = `heading-level-${level} ${level === 1 ? 'mb-8' : 'mb-2 mt-4'}`;
-    const tag = `h${level}`;
-    const formatted = italicizeEnglishWordsText(text);
-    const content = style.uppercase ? formatted.toUpperCase() : formatted;
-    const headingId = `heading-${text.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-    
-    return React.createElement(tag, {
-      id: headingId,
-      className: className,
-      style: getHeadingStyle(level),
-      dangerouslySetInnerHTML: { __html: content }
-    });
-  };
+  const renderHeading = (level, text) => renderPreviewHeading({
+    level,
+    text,
+    headingStyles,
+    formatInlineText: italicizeEnglishWordsText,
+  });
 
   const scanTextForHeadings = (text, pageId) => {
     if (!text) return [];
@@ -2790,84 +2845,14 @@ export default function Index() {
     return entries;
   };
 
-  const getTocEntries = () => {
-    const entries = [];
-    
-    if (layout.showPersetujuan) entries.push({ title: "HALAMAN PERSETUJUAN", pageId: 'persetujuan', isBold: true });
-    if (layout.showPengesahan) entries.push({ title: "HALAMAN PENGESAHAN", pageId: 'pengesahan', isBold: true });
-    if (layout.showPernyataan) entries.push({ title: "LEMBAR PERNYATAAN KEASLIAN", pageId: 'pernyataan', isBold: true });
-    if (layout.showAbstractIndo) entries.push({ title: "ABSTRAK", pageId: 'abstrak-indo', isBold: true });
-    if (layout.showAbstractEng) entries.push({ title: "ABSTRACT", pageId: 'abstrak-eng', isBold: true });
-    
-    entries.push({ title: "DAFTAR ISI", pageId: 'daftar-isi-1', isBold: true });
-    entries.push({ title: "DAFTAR TABEL", pageId: 'daftar-tabel-1', isBold: true });
-    entries.push({ title: "DAFTAR GAMBAR", pageId: 'daftar-gambar-1', isBold: true });
-    if (layout.showDaftarRumus) entries.push({ title: "DAFTAR RUMUS", pageId: 'daftar-rumus-1', isBold: true });
-    
-    // Build a lookup: blockId -> pageIndex (1-based) from the dynamic pagination engine
-    const babPagesMapForToc = getBabPagesMap();
-    const getBlockPageIdx = (babKey, blockId) => {
-      const pages = babPagesMapForToc[babKey] || [];
-      for (let pIdx = 0; pIdx < pages.length; pIdx++) {
-        if (pages[pIdx].some(el => el.blockId === blockId)) {
-          return pIdx + 1;
-        }
-      }
-      return 1;
-    };
-
-    const addChapterTocEntries = (babKey) => {
-      const rawSections = babSections[babKey] || [];
-      const sections = resolveBlockNumberingForBab(babKey, rawSections);
-      sections.forEach(s => {
-        const dynamicPageIdx = getBlockPageIdx(babKey, s.id);
-        if (s.headingLevel > 0) {
-          let indent = '0.75cm';
-          if (s.headingLevel === 3) indent = '1.25cm';
-          else if (s.headingLevel === 4) indent = '1.75cm';
-          else if (s.headingLevel === 5) indent = '2.25cm';
-          else if (s.headingLevel === 6) indent = '2.75cm';
-          
-          entries.push({
-            title: `${s.resolvedPrefix || ''}${s.title}`,
-            pageId: `${babKey}-${dynamicPageIdx}`,
-            indent: indent,
-            isBold: s.headingLevel === 2
-          });
-        }
-        entries.push(...scanTextForHeadings(s.content, `${babKey}-${dynamicPageIdx}`));
-      });
-    };
-
-    // BAB I
-    entries.push({ title: `${babTitles.bab1.prefix} ${babTitles.bab1.title}`, pageId: 'bab1-1', isBold: true, isChapter: true });
-    addChapterTocEntries('bab1');
-    
-    // BAB II
-    entries.push({ title: `${babTitles.bab2.prefix} ${babTitles.bab2.title}`, pageId: 'bab2-1', isBold: true, isChapter: true });
-    addChapterTocEntries('bab2');
-    
-    // BAB III
-    entries.push({ title: `${babTitles.bab3.prefix} ${babTitles.bab3.title}`, pageId: 'bab3-1', isBold: true, isChapter: true });
-    addChapterTocEntries('bab3');
-    
-    // BAB IV
-    entries.push({ title: `${babTitles.bab4.prefix} ${babTitles.bab4.title}`, pageId: 'bab4-1', isBold: true, isChapter: true });
-    addChapterTocEntries('bab4');
-    
-    // BAB V
-    entries.push({ title: `${babTitles.bab5.prefix} ${babTitles.bab5.title}`, pageId: 'bab5-1', isBold: true, isChapter: true });
-    addChapterTocEntries('bab5');
-
-    if (getRenderableBabKeys().includes('bab6')) {
-      entries.push({ title: `${babTitles.bab6.prefix} ${babTitles.bab6.title}`, pageId: 'bab6-1', isBold: true, isChapter: true });
-      addChapterTocEntries('bab6');
-    }
-    
-    entries.push({ title: "DAFTAR PUSTAKA", pageId: 'daftar-pustaka-1', isBold: true, isChapter: true });
-    
-    return entries;
-  };
+  const getTocEntries = () => buildTocEntries({
+    layout,
+    babSections,
+    babTitles,
+    babPagesMap: getBabPagesMap(),
+    renderableBabKeys: getRenderableBabKeys(),
+    scanTextForHeadings,
+  });
 
   const tocPagesCacheRef = useRef({ deps: null, value: null });
   const getTocPages = () => {
@@ -2881,60 +2866,10 @@ export default function Index() {
     return value;
   };
 
-  const computeTocPages = () => {
-    const entries = getTocEntries();
-    const pages = [];
-    
-    const contentHeightCm = 29.7 - layout.marginTop - layout.marginBottom;
-    const isDoubleSpacing = layout.lineSpacing === '2.0';
-    const lineHeightCm = isDoubleSpacing ? 0.85 : 0.65;
-    
-    // First page has the "DAFTAR ISI" title which occupies space (approx 2.2cm with spacing)
-    const firstPageAvailableHeight = contentHeightCm - 2.2; 
-    const nextPageAvailableHeight = contentHeightCm;
-    
-    let currentPage = [];
-    let currentHeight = 0;
-    let isFirstPage = true;
-    
-    entries.forEach(entry => {
-      // Estimate lines occupied by this entry
-      let lines = 1;
-      const titleLen = entry.title.length;
-      const indentCm = entry.indent ? parseFloat(entry.indent) : 0;
-      // Estimate characters that fit on a single line
-      const printableWidthCm = 21.0 - layout.marginLeft - layout.marginRight - indentCm;
-      const charsPerLine = Math.max(30, Math.floor(printableWidthCm / 0.18));
-      
-      if (titleLen > charsPerLine) {
-        lines = Math.ceil(titleLen / charsPerLine);
-      }
-      
-      // Each entry has: lines * lineHeightCm + flex gap (gap-2 is 0.21cm)
-      let entryHeight = (lines * lineHeightCm) + 0.21;
-      if (entry.isChapter) {
-        entryHeight += 0.32; // mt-3 is 0.32cm
-      }
-      
-      const maxHeight = isFirstPage ? firstPageAvailableHeight : nextPageAvailableHeight;
-      
-      if (currentHeight + entryHeight > maxHeight && currentPage.length > 0) {
-        pages.push(currentPage);
-        currentPage = [entry];
-        currentHeight = entryHeight;
-        isFirstPage = false;
-      } else {
-        currentPage.push(entry);
-        currentHeight += entryHeight;
-      }
-    });
-    
-    if (currentPage.length > 0) {
-      pages.push(currentPage);
-    }
-    
-    return pages;
-  };
+  const computeTocPages = () => paginateTocEntries({
+    entries: getTocEntries(),
+    layout,
+  });
 
   const refPagesCacheRef = useRef({ deps: null, value: null });
   const getReferencesPages = () => {
@@ -2948,65 +2883,11 @@ export default function Index() {
     return value;
   };
 
-  const computeReferencesPages = () => {
-    const refs = sortedReferences();
-    const pages = [];
-    
-    const contentHeightCm = 29.7 - layout.marginTop - layout.marginBottom;
-    const isDoubleSpacing = layout.lineSpacing === '2.0';
-    const lineHeightCm = isDoubleSpacing ? 0.85 : 0.65;
-    
-    // First page has "DAFTAR PUSTAKA" title which takes about 2.2cm with spacing
-    const firstPageAvailableHeight = contentHeightCm - 2.2;
-    const nextPageAvailableHeight = contentHeightCm;
-    
-    let currentPage = [];
-    let currentHeight = 0;
-    let isFirstPage = true;
-    
-    refs.forEach(ref => {
-      let refText = '';
-      if (refStyle === 'apa') {
-        refText = `${ref.author || ''}. (${ref.year || ''}). ${ref.title || ''}. ${ref.publisher || ''}.`;
-      } else {
-        refText = `[99] ${ref.author || ''}, "${ref.title || ''}," ${ref.publisher || ''}, ${ref.year || ''}.`;
-      }
-      
-      const titleLen = refText.length;
-      const indentCm = refStyle === 'apa' ? 1.25 : 0.8;
-      const printableWidthCm = 21.0 - layout.marginLeft - layout.marginRight - indentCm;
-      const charsPerLine = Math.max(30, Math.floor(printableWidthCm / 0.18));
-      
-      let lines = 1;
-      if (titleLen > charsPerLine) {
-        lines = Math.ceil(titleLen / charsPerLine);
-      }
-      
-      // Each reference has: lines * lineHeightCm + spacing (space-y-3 is 0.32cm)
-      const refHeight = (lines * lineHeightCm) + 0.32;
-      const maxHeight = isFirstPage ? firstPageAvailableHeight : nextPageAvailableHeight;
-      
-      if (currentHeight + refHeight > maxHeight && currentPage.length > 0) {
-        pages.push(currentPage);
-        currentPage = [ref];
-        currentHeight = refHeight;
-        isFirstPage = false;
-      } else {
-        currentPage.push(ref);
-        currentHeight += refHeight;
-      }
-    });
-    
-    if (currentPage.length > 0) {
-      pages.push(currentPage);
-    }
-    
-    if (pages.length === 0) {
-      pages.push([]);
-    }
-    
-    return pages;
-  };
+  const computeReferencesPages = () => paginateReferences({
+    references: sortedReferences(),
+    refStyle,
+    layout,
+  });
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
@@ -3238,767 +3119,32 @@ export default function Index() {
 
   const getPagePrintClass = (pageId) => resolvePagePrintClass(pagesToPrint, pageId);
 
-  const executeWordExport = async (pageIds, filename) => {
-    let combinedHtml = '';
-    
-    const cleanFontFamily = layout.fontFamily ? layout.fontFamily.split(',')[0].replace(/['"]/g, "").trim() : 'Times New Roman';
-    const spacingNum = parseFloat(layout.lineSpacing || '2.0');
-    const wordLineHeight = Math.round(spacingNum * 100) + '%';
-    const baseFontSize = layout.fontSize || '12pt';
-
-    // Build a map of figure blockId -> natural pixel dimensions from the rendered DOM,
-    // so exported images can be scaled to match the on-screen (web) display size.
-    const figureDims = {};
-    document.querySelectorAll('img[data-fig-id]').forEach(img => {
-      const id = img.getAttribute('data-fig-id');
-      if (id && img.naturalWidth && img.naturalHeight) {
-        figureDims[id] = { w: img.naturalWidth, h: img.naturalHeight };
-      }
-    });
-
-    // ==========================================================================
-    // Build chapter content DIRECTLY from source data (not from paginated DOM).
-    // This lets Word handle pagination naturally so text flows correctly and
-    // matches the layout/format settings, instead of inheriting the web's
-    // pixel-estimated page splits (which fragment paragraphs and lists).
-    // ==========================================================================
-    const buildTableWordHtml = (sec) => {
-      return buildWordTableHtml({
-        section: sec,
-        layout,
-        cleanFontFamily,
-        baseFontSize,
-        formatText: italicizeEnglishWordsText,
-      });
-    };
-
-    const buildFigureWordHtml = (sec) => {
-      let h = `<div style="margin-top:12pt; margin-bottom:12pt; text-align:center; text-indent:0cm;">`;
-      if (sec.imageData) {
-        // Use the user-defined width (cm); height follows the image's natural aspect ratio
-        const dim = figureDims[sec.id];
-        const PX = 37.795; // px per cm
-        const wCm = sec.imgWidth || 12;
-        let imgTag;
-        if (dim && dim.w && dim.h) {
-          const ar = dim.w / dim.h;
-          const hCm = wCm / ar;
-          const wPx = Math.round(wCm * PX);
-          const hPx = Math.round(hCm * PX);
-          imgTag = `<img src="${sec.imageData}" width="${wPx}" height="${hPx}" style="width:${wCm.toFixed(2)}cm; height:${hCm.toFixed(2)}cm;" />`;
-        } else {
-          // Natural dimensions unknown: set width only, Word keeps aspect ratio
-          const wPx = Math.round(wCm * PX);
-          imgTag = `<img src="${sec.imageData}" width="${wPx}" style="width:${wCm.toFixed(2)}cm;" />`;
-        }
-        h += `${imgTag}<br/>`;
-      } else {
-        h += `<div style="border:1px dashed #777; background-color:#f3f4f6; width:100%; height:120px; padding:20px; text-align:center;"><p style="font-family:monospace; font-size:9pt; color:#555; text-align:center; text-indent:0cm; margin-top:20px;">[Skema / Diagram Model]</p></div>`;
-      }
-      h += `<p style="font-weight:bold; font-size:11pt; text-align:center; text-indent:0cm; margin:6pt 0 0 0; font-family:${cleanFontFamily};">${italicizeEnglishWordsText(sec.title || 'Gambar')}</p>`;
-      h += `</div>`;
-      return h;
-    };
-
-    const buildEquationWordHtml = (babKey, sec) => {
-      const babMatch = babKey.match(/\d+/);
-      const babNum = babMatch ? babMatch[0] : '1';
-      const babSecs = babSections[babKey] || [];
-      const eqIdx = babSecs.filter(s => s.type === 'equation').findIndex(s => s.id === sec.id);
-      const prefix = `(${babNum}.${eqIdx !== -1 ? eqIdx + 1 : 1})`;
-      const descLines = sec.description ? sec.description.split('\n').filter(l => l.trim()) : [];
-      let h = `<div style="margin-top:12pt; margin-bottom:12pt; text-indent:0cm;">`;
-      if (sec.title && sec.title.trim()) {
-        h += `<p style="margin:0 0 6pt 0; font-weight:bold; font-size:12pt; text-align:left; text-indent:0cm; font-family:${cleanFontFamily};">${italicizeEnglishWordsText(sec.title)}</p>`;
-      }
-      h += `<table border="0" cellspacing="0" cellpadding="0" style="border-collapse:collapse; width:100%; border:none; margin-top:6pt; margin-bottom:6pt;"><tr style="border:none;"><td style="width:90%; text-align:center; font-family:${cleanFontFamily}; font-size:12pt; font-weight:bold; font-style:italic; border:none; padding:0;">${renderFormula(sec.content || 'y = f(x)')}</td><td style="width:10%; text-align:right; font-family:${cleanFontFamily}; font-size:12pt; font-weight:bold; border:none; padding:0;">${prefix}</td></tr></table>`;
-      if (descLines.length > 0) {
-        let descHtml = '<span style="font-weight:bold;">Keterangan:</span><br/>';
-        descLines.forEach((line, lIdx) => {
-          descHtml += `<span style="font-style:italic;">${italicizeEnglishWordsText(line)}</span>`;
-          if (lIdx < descLines.length - 1) descHtml += '<br/>';
-        });
-        h += `<p style="margin:6pt 0 0 1cm; text-indent:0cm; font-family:${cleanFontFamily}; font-size:11pt; line-height:1.2;">${descHtml}</p>`;
-      }
-      h += `</div>`;
-      return h;
-    };
-
-    const buildChapterWordContent = (babKey) => {
-      const rawSections = babSections[babKey] || [];
-      const resolved = resolveBlockNumberingForBab(babKey, rawSections);
-      let html = '';
-
-      // BAB chapter heading (h1)
-      const babTitle = babTitles[babKey];
-      if (babTitle) {
-        const h1s = headingStyles.h1 || {};
-        let titleHtml = `${babTitle.prefix}<br/>${babTitle.title}`;
-        if (h1s.uppercase) titleHtml = titleHtml.toUpperCase();
-        html += `<h1 class="MsoHeading1" style="mso-outline-level:1; text-align:${h1s.textAlign || 'center'}; font-size:${h1s.fontSize || '14pt'}; font-weight:${h1s.fontWeight || 'bold'}; font-style:${h1s.fontStyle || 'normal'}; font-family:${cleanFontFamily};">${titleHtml}</h1>`;
-      }
-
-      const renderContentText = (rawText, textAlign = 'justify', section = {}) => {
-        let out = '';
-        const { leftIndent, rightIndent, textIndent } = getSectionParagraphIndent(section);
-        const paragraphMargin = `margin-left:${leftIndent}cm; margin-right:${rightIndent}cm;`;
-        const paragraphs = rawText.split(/\n+/).filter(p => p.trim());
-        paragraphs.forEach((p, paragraphIndex) => {
-          const text = p.trim();
-          const paragraphAlign = getParagraphAlignment(section, paragraphIndex, textAlign);
-          if (text === '---') {
-            out += '<br clear="all" style="page-break-before: always;" />';
-            return;
-          }
-          // Honor inline [pagebreak] markers by splitting into parts
-          const parts = text.split(/\[\s*(?:page[-_\s]*)?br[ea]{1,2}ke?\s*\]/gi);
-          parts.forEach((part, index) => {
-            const cleanedPart = part.trim();
-            if (cleanedPart) {
-              const listMatch = cleanedPart.match(/^([0-9a-zA-Z]+[\.\)])\s+(.*)$/);
-              if (listMatch) {
-                const isAlphaSubPoint = /^[a-z][\.)]$/.test(listMatch[1]);
-                const listLeftIndent = leftIndent + (isAlphaSubPoint ? 1.55 : 1);
-                const hangingIndent = isAlphaSubPoint ? 0.55 : 1;
-                out += `<p style="margin:0; margin-left:${listLeftIndent}cm; margin-right:${rightIndent}cm; text-indent:-${hangingIndent}cm; mso-tab-stops:${hangingIndent}cm; text-align:${paragraphAlign}; line-height:${wordLineHeight}; font-family:${cleanFontFamily}; font-size:${baseFontSize};"><span style="font-weight:bold;">${listMatch[1]}</span><span style="mso-tab-count:1">&#9;</span>${italicizeEnglishWordsText(listMatch[2].trimStart())}</p>`;
-              } else {
-                out += `<p class="paragraph-content" style="${paragraphMargin} text-indent:${textIndent}cm; text-align:${paragraphAlign}; margin-top:0; margin-bottom:0; line-height:${wordLineHeight}; font-family:${cleanFontFamily}; font-size:${baseFontSize};">${italicizeEnglishWordsText(cleanedPart)}</p>`;
-              }
-            }
-            if (index < parts.length - 1) {
-              out += '<br clear="all" style="page-break-before: always;" />';
-            }
-          });
-        });
-        return out;
-      };
-
-      resolved.forEach(sec => {
-        if (sec.type === 'table') {
-          html += buildTableWordHtml(sec);
-        } else if (sec.type === 'figure') {
-          html += buildFigureWordHtml(sec);
-        } else if (sec.type === 'equation') {
-          html += buildEquationWordHtml(babKey, sec);
-        } else {
-          // text section
-          if (sec.headingLevel > 0) {
-            const lvl = sec.headingLevel;
-            const hs = headingStyles[`h${lvl}`] || {};
-            let titleHtml = italicizeEnglishWordsText(`${sec.resolvedPrefix || ''}${sec.title || ''}`);
-            if (hs.uppercase) titleHtml = titleHtml.toUpperCase();
-            html += `<h${lvl} class="MsoHeading${lvl}" style="mso-outline-level:${lvl}; text-align:${hs.textAlign || 'left'}; font-size:${lvl === 3 ? '12pt' : (hs.fontSize || '12pt')}; font-weight:${hs.fontWeight || 'bold'}; font-style:${lvl === 3 ? 'normal' : (hs.fontStyle || 'normal')}; font-family:${cleanFontFamily};">${titleHtml}</h${lvl}>`;
-          }
-          if (sec.content && sec.content.trim()) {
-            html += renderContentText(sec.content, sec.textAlign || layout.textAlign || 'justify', sec);
-          }
-        }
-      });
-
-      return html;
-    };
-
-    const processedBabs = new Set();
-
-    // Section management: cover = its own section WITHOUT page numbers; prelims =
-    // WordSection1 (roman); chapters + references = WordSection2 (arabic).
-    let currentSection = null;
-    const sectionOf = (pid) => {
-      if (pid === 'cover') return 'cover';
-      if (/^bab\d+-\d+$/.test(pid) || pid.startsWith('daftar-pustaka')) return 'main';
-      return 'prelim';
-    };
-    const sectionClassMap = { cover: 'WordSectionCover', prelim: 'WordSection1', main: 'WordSection2' };
-    const sectionTransition = (pid) => {
-      const sec = sectionOf(pid);
-      let html;
-      if (currentSection === null) {
-        html = `<div class="${sectionClassMap[sec]}">`;
-      } else if (sec !== currentSection) {
-        html = `</div><br clear="all" style="page-break-before: always; mso-break-type: section-break;" /><div class="${sectionClassMap[sec]}">`;
-      } else {
-        html = '<br clear="all" style="page-break-before: always;" />';
-      }
-      currentSection = sec;
-      return html;
-    };
-
-    pageIds.forEach((pageId, idx) => {
-      // CHAPTER PAGES: build once per chapter from source, let Word paginate
-      const babMatch = pageId.match(/^(bab\d+)-\d+$/);
-      if (babMatch) {
-        const babKey = babMatch[1];
-        if (processedBabs.has(babKey)) return; // already built this chapter
-        processedBabs.add(babKey);
-
-        combinedHtml += sectionTransition(pageId);
-        combinedHtml += `<div class="word-page">${buildChapterWordContent(babKey)}</div>`;
-        return;
-      }
-
-      if (pageId === 'cover') {
-        combinedHtml += sectionTransition(pageId);
-        combinedHtml += `<div class="word-page">${buildCoverWordHtml({ coverElements, cleanFontFamily })}</div>`;
-        return;
-      }
-
-      const pageEl = document.getElementById(`page-${pageId}`);
-      if (pageEl) {
-        const contentClone = pageEl.querySelector('.page-content').cloneNode(true);
-        
-        // Remove print-only or editor helper controls
-        contentClone.querySelectorAll('.no-print').forEach(el => el.remove());
-        
-        // Unwrap heading elements (h1-h6) from nested div wrappers so Word recognizes them as outline headings
-        contentClone.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(heading => {
-          let parent = heading.parentElement;
-          // Keep unwrapping if parent div only contains this heading (after no-print removal)
-          while (parent && parent.tagName === 'DIV' && parent !== contentClone) {
-            const siblings = Array.from(parent.childNodes).filter(n => n.nodeType === 1 || (n.nodeType === 3 && n.textContent.trim()));
-            if (siblings.length === 1 && siblings[0] === heading) {
-              const grandparent = parent.parentElement;
-              grandparent.replaceChild(heading, parent);
-              parent = heading.parentElement;
-            } else {
-              break;
-            }
-          }
-        });
-        
-        // Find empty spacing elements and insert non-breaking spaces so Word doesn't collapse them
-        contentClone.querySelectorAll('div').forEach(div => {
-          if (div.style.height && !div.innerHTML.trim()) {
-            div.innerHTML = '&nbsp;';
-            div.style.fontSize = '1pt';
-            div.style.lineHeight = '1';
-          }
-        });
-        
-        // Ensure image sizes are preserved in Word
-        contentClone.querySelectorAll('img').forEach(img => {
-          if (!img.getAttribute('width')) {
-             if (img.classList.contains('max-w-[5.5cm]')) {
-                 img.setAttribute('width', '200');
-                 img.setAttribute('height', '200');
-             } else {
-                 img.setAttribute('width', '400');
-             }
-          }
-        });
-
-        // Transform dynamic flex lists to borderless 2-column Word-friendly tables
-        contentClone.querySelectorAll('.flex').forEach(flexEl => {
-          const bulletSpan = flexEl.querySelector('.w-8');
-          const textSpan = flexEl.querySelector('.flex-1');
-          if (bulletSpan && textSpan) {
-            const p = document.createElement('p');
-            p.style.margin = '0';
-            const listMarginLeft = flexEl.style.marginLeft || '0cm';
-            const listMarginRight = flexEl.style.marginRight || '0cm';
-            p.style.marginLeft = `calc(${listMarginLeft} + 1cm)`;
-            p.style.marginRight = listMarginRight;
-            p.style.textIndent = '-1cm';
-            p.style.textAlign = flexEl.style.textAlign || textSpan.style.textAlign || 'justify';
-            p.setAttribute('style', (p.getAttribute('style') || '') + '; mso-tab-stops:1.0cm;');
-            
-            p.innerHTML = `<span style="font-weight:bold;">${bulletSpan.innerHTML.trim()}</span><span style="mso-tab-count:1">&#9;</span>${textSpan.innerHTML.trim()}`;
-            
-            flexEl.parentNode.replaceChild(p, flexEl);
-          } else if (flexEl.classList.contains('justify-between') && flexEl.classList.contains('items-baseline')) {
-            const titleContainer = flexEl.children[0];
-            const pageNumContainer = flexEl.children[1];
-            
-            if (titleContainer && pageNumContainer) {
-              const p = document.createElement('p');
-              p.style.margin = '0';
-              p.style.marginBottom = '2pt';
-              p.style.textAlign = 'left';
-              
-              if (flexEl.style.paddingLeft) {
-                p.style.marginLeft = flexEl.style.paddingLeft;
-              }
-              if (flexEl.classList.contains('mt-3')) {
-                p.style.marginTop = '12pt';
-              }
-              if (flexEl.classList.contains('font-bold')) {
-                p.style.fontWeight = 'bold';
-              }
-              
-              const contentWidth = 21.0 - (parseFloat(layout.marginLeft) || 4.0) - (parseFloat(layout.marginRight) || 3.0);
-              // NATIVE WORD DOT LEADER (relies on .toc-item class in <style> block)
-              p.classList.add('toc-item');
-              
-              const titleSpan = titleContainer.querySelector('.pr-2');
-              const titleHtml = titleSpan ? titleSpan.innerHTML : titleContainer.innerHTML;
-              const pageHtml = pageNumContainer.innerHTML;
-              
-              p.innerHTML = `${titleHtml}<span style="mso-tab-count:1">&#9;</span>${pageHtml}`;
-              
-              flexEl.parentNode.replaceChild(p, flexEl);
-            }
-          }
-        });
-
-        // Transform dynamic flex equation containers to borderless tables for Word
-        contentClone.querySelectorAll('.equation-block').forEach(eqEl => {
-          // Find components
-          const titleDiv = eqEl.querySelector('.font-bold.text-xs.text-left');
-          const titleText = titleDiv ? titleDiv.innerHTML : '';
-          
-          // Formula and prefix
-          const formulaContainer = eqEl.querySelector('.flex.items-center.justify-between');
-          const formulaText = formulaContainer?.querySelector('.flex-1')?.innerHTML || '';
-          const prefixText = formulaContainer?.querySelector('.shrink-0')?.innerHTML || '';
-          
-          // Keterangan lines
-          const descContainer = eqEl.querySelector('.text-\\[10pt\\]');
-          const descLines = [];
-          if (descContainer) {
-            descContainer.querySelectorAll('div > div').forEach(lineEl => {
-              descLines.push(lineEl.innerHTML);
-            });
-          }
-          
-          // Construct Word-friendly HTML replacement
-          const newContainer = document.createElement('div');
-          newContainer.style.marginTop = '12pt';
-          newContainer.style.marginBottom = '12pt';
-          newContainer.style.textIndent = '0cm';
-          
-          if (titleText.trim()) {
-            const titleP = document.createElement('p');
-            titleP.style.margin = '0';
-            titleP.style.marginBottom = '6pt';
-            titleP.style.fontWeight = 'bold';
-            titleP.style.fontSize = '12pt';
-            titleP.style.textAlign = 'left';
-            titleP.style.fontFamily = cleanFontFamily;
-            titleP.innerHTML = titleText;
-            newContainer.appendChild(titleP);
-          }
-          
-          // Create the borderless table for centered formula and right-aligned numbering
-          const table = document.createElement('table');
-          table.setAttribute('border', '0');
-          table.setAttribute('cellspacing', '0');
-          table.setAttribute('cellpadding', '0');
-          table.style.borderCollapse = 'collapse';
-          table.style.width = '100%';
-          table.style.border = 'none';
-          table.style.marginTop = '6pt';
-          table.style.marginBottom = '6pt';
-          table.classList.add('border-none'); 
-          table.classList.add('equation-table'); 
-          
-          const tr = document.createElement('tr');
-          tr.style.border = 'none';
-          
-          const tdFormula = document.createElement('td');
-          tdFormula.style.width = '90%';
-          tdFormula.style.textAlign = 'center';
-          tdFormula.style.fontFamily = cleanFontFamily;
-          tdFormula.style.fontSize = '12pt';
-          tdFormula.style.fontWeight = 'bold';
-          tdFormula.style.fontStyle = 'italic';
-          tdFormula.style.border = 'none';
-          tdFormula.style.padding = '0';
-          tdFormula.innerHTML = formulaText;
-          
-          const tdPrefix = document.createElement('td');
-          tdPrefix.style.width = '10%';
-          tdPrefix.style.textAlign = 'right';
-          tdPrefix.style.fontFamily = cleanFontFamily;
-          tdPrefix.style.fontSize = '12pt';
-          tdPrefix.style.fontWeight = 'bold';
-          tdPrefix.style.border = 'none';
-          tdPrefix.style.padding = '0';
-          tdPrefix.innerHTML = prefixText;
-          
-          tr.appendChild(tdFormula);
-          tr.appendChild(tdPrefix);
-          table.appendChild(tr);
-          newContainer.appendChild(table);
-          
-          // Keterangan if exists
-          if (descLines.length > 0) {
-            const descP = document.createElement('p');
-            descP.style.margin = '0';
-            descP.style.marginTop = '6pt';
-            descP.style.marginBottom = '0pt';
-            descP.style.marginLeft = '1cm';
-            descP.style.textIndent = '0cm';
-            descP.style.fontFamily = cleanFontFamily;
-            descP.style.fontSize = '11pt';
-            descP.style.lineHeight = '1.2';
-            
-            let descHtml = '<span style="font-weight:bold;">Keterangan:</span><br/>';
-            descLines.forEach((line, lIdx) => {
-              descHtml += `<span style="font-style:italic;">${line}</span>`;
-              if (lIdx < descLines.length - 1) {
-                descHtml += '<br/>';
-              }
-            });
-            descP.innerHTML = descHtml;
-            newContainer.appendChild(descP);
-          }
-          
-          eqEl.parentNode.replaceChild(newContainer, eqEl);
-        });
-
-        // Ensure mock diagrams / empty image cards render nicely with borders in Word instead of collapsing
-        contentClone.querySelectorAll('div').forEach(div => {
-          if (div.classList.contains('bg-slate-50') && !div.querySelector('img')) {
-            div.style.border = '1px dashed #777';
-            div.style.backgroundColor = '#f3f4f6';
-            div.style.width = '100%';
-            div.style.height = '120px';
-            div.style.padding = '20px';
-            div.style.textAlign = 'center';
-            div.innerHTML = `<p style="font-family: monospace; font-size: 9pt; color: #555; text-align: center; text-indent: 0cm; margin-top: 20px;">[Skema / Diagram Model]</p>`;
-          }
-        });
-
-        // Translate Tailwind alignment, weight, and border classes to direct CSS attributes
-        contentClone.querySelectorAll('*').forEach(el => {
-          let style = '';
-          if (el.classList.contains('text-center') || el.style.textAlign === 'center') {
-            style += 'text-align: center; ';
-            el.setAttribute('align', 'center');
-          } else if (el.classList.contains('text-justify') || el.style.textAlign === 'justify') {
-            style += 'text-align: justify; ';
-          } else if (el.classList.contains('text-right') || el.style.textAlign === 'right') {
-            style += 'text-align: right; ';
-            el.setAttribute('align', 'right');
-          }
-          
-          if (el.classList.contains('font-bold') || el.tagName === 'H1' || el.tagName === 'H2' || el.tagName === 'H3' || el.tagName === 'H4') {
-            style += 'font-weight: bold; ';
-          }
-          if (el.classList.contains('underline')) {
-            style += 'text-decoration: underline; ';
-          }
-          if (el.classList.contains('italic')) {
-            style += 'font-style: italic; ';
-          }
-          if (el.classList.contains('uppercase')) {
-            style += 'text-transform: uppercase; ';
-          }
-          
-          style += `font-family: ${cleanFontFamily}; `;
-          
-          // Style headings dynamically from headingStyles if matched
-          const tagNameLower = el.tagName.toLowerCase();
-          if (headingStyles[tagNameLower]) {
-            const hStyle = headingStyles[tagNameLower];
-            style += `font-size: ${hStyle.fontSize || '12pt'}; `;
-            style += `font-weight: ${hStyle.fontWeight || 'bold'}; `;
-            style += `font-style: ${hStyle.fontStyle || 'normal'}; `;
-            style += `text-align: ${hStyle.textAlign || 'center'}; `;
-            el.setAttribute('align', hStyle.textAlign || 'center');
-            if (hStyle.uppercase) {
-              style += `text-transform: uppercase; `;
-            }
-            // Add mso-outline-level for Word navigation pane
-            const hLevel = parseInt(tagNameLower.replace('h', ''));
-            if (hLevel >= 1 && hLevel <= 6) {
-              style += `mso-outline-level: ${hLevel}; `;
-              el.classList.add(`MsoHeading${hLevel}`);
-            }
-          } else if (/^h[1-6]$/.test(tagNameLower)) {
-            // Heading tag without custom headingStyles config — still add outline level
-            const hLevel = parseInt(tagNameLower.replace('h', ''));
-            style += `mso-outline-level: ${hLevel}; `;
-            el.classList.add(`MsoHeading${hLevel}`);
-          } else {
-            // Apply text sizing classes from Tailwind (e.g. text-[14pt])
-            let hasCustomSize = false;
-            el.classList.forEach(cls => {
-              if (cls.startsWith('text-[') && cls.endsWith(']')) {
-                const val = cls.substring(6, cls.length - 1);
-                style += `font-size: ${val}; `;
-                hasCustomSize = true;
-              }
-            });
-            
-            // Only set default line-height and font-size on text tags if they are not headings
-            if (el.tagName === 'P' || el.tagName === 'SPAN' || el.tagName === 'DIV' || el.tagName === 'TD' || el.tagName === 'TH' || el.tagName === 'LI') {
-              if (!hasCustomSize) {
-                style += `font-size: ${layout.fontSize || '12pt'}; `;
-              }
-              
-              // Spacing inside table cells vs body text
-              if (el.tagName === 'TD' || el.tagName === 'TH') {
-                style += 'line-height: 1.5; '; // Tables generally use single/1.5 spacing
-              } else {
-                style += `line-height: ${wordLineHeight}; `;
-              }
-            }
-          }
-
-          // Apply paragraph indentation to normal paragraph contents
-          if (el.classList.contains('paragraph-content')) {
-            if (!el.style.textIndent) {
-              if (layout.paragraphIndent === 'indented') {
-                style += 'text-indent: 1.25cm; ';
-              } else {
-                style += 'text-indent: 0cm; ';
-              }
-            }
-            style += 'margin-bottom: 0pt; ';
-            style += `line-height: ${wordLineHeight}; `;
-          }
-          
-          // Style tables dynamically to prevent adding ugly borders to layout alignment tables (e.g. Persetujuan)
-          if (el.tagName === 'TABLE') {
-            const hasBorder = !el.classList.contains('border-none') && !el.style.borderWidth;
-            if (hasBorder) {
-              el.setAttribute('border', '1');
-              el.setAttribute('cellspacing', '0');
-              el.setAttribute('cellpadding', '5');
-              style += 'border-collapse: collapse; width: 100%; border: 1px solid #000; margin-top: 12pt; margin-bottom: 12pt; ';
-            } else {
-              el.setAttribute('border', '0');
-              el.setAttribute('cellspacing', '0');
-              el.setAttribute('cellpadding', '5');
-              style += 'border-collapse: collapse; border: none; margin-top: 12pt; margin-bottom: 12pt; ';
-            }
-          }
-          if (el.tagName === 'TD' || el.tagName === 'TH') {
-            const parentTable = el.closest('table');
-            const tableHasBorder = parentTable && !parentTable.classList.contains('border-none');
-            if (tableHasBorder) {
-              const ths = Array.from(parentTable.querySelectorAll('thead th'));
-              const cellIndex = Array.from(el.parentNode.children).indexOf(el);
-              const isNoCol = ths[cellIndex] && ths[cellIndex].textContent.trim().toLowerCase() === 'no';
-              style += `border: 1px solid #000; padding: 6px; vertical-align: top; text-align: ${isNoCol ? 'center' : 'left'}; `;
-            } else if (parentTable && parentTable.classList.contains('equation-table')) {
-              style += 'border: none; padding: 0px; ';
-            } else {
-              style += 'border: none; padding: 6px; ';
-            }
-
-            // Capture background color and colSpan/rowSpan for MS Word compatibility
-            const bgVal = el.style.backgroundColor || el.style.background;
-            if (bgVal) {
-              el.setAttribute('bgcolor', bgVal);
-              style += `background-color: ${bgVal}; `;
-            }
-            if (el.colSpan && el.colSpan > 1) {
-              el.setAttribute('colspan', String(el.colSpan));
-            }
-            if (el.rowSpan && el.rowSpan > 1) {
-              el.setAttribute('rowspan', String(el.rowSpan));
-            }
-          }
-          
-          if (style) {
-            el.setAttribute('style', (el.getAttribute('style') || '') + '; ' + style);
-          }
-        });
-        
-        combinedHtml += sectionTransition(pageId);
-        combinedHtml += `<div class="word-page">${contentClone.innerHTML}</div>`;
-      }
-    });
-
-    if (combinedHtml) combinedHtml += '</div>';
-
-    const docHtml = `
-      <html xmlns:o='urn:schemas-microsoft-com:office:office' 
-            xmlns:w='urn:schemas-microsoft-com:office:word' 
-            xmlns='http://www.w3.org/TR/REC-html40'>
-      <head>
-        <title>${filename}</title>
-        <!--[if gte mso 9]>
-        <xml>
-          <w:WordDocument>
-            <w:View>Print</w:View>
-            <w:Zoom>100</w:Zoom>
-            <w:DoNotOptimizeForBrowser/>
-          </w:WordDocument>
-        </xml>
-        <![endif]-->
-        <style>
-          @page {
-            size: 21cm 29.7cm; /* A4 */
-            margin: ${layout.marginTop || 4}cm ${layout.marginRight || 3}cm ${layout.marginBottom || 3}cm ${layout.marginLeft || 4}cm;
-          }
-          @page WordSectionCover {
-            size: 21cm 29.7cm; /* A4 */
-            margin: ${layout.marginTop || 4}cm ${layout.marginRight || 3}cm ${layout.marginBottom || 3}cm ${layout.marginLeft || 4}cm;
-            mso-header-margin: 35.4pt;
-            mso-footer-margin: 35.4pt;
-            mso-header: hc;
-            mso-footer: fc;
-            mso-paper-source: 0;
-          }
-          div.WordSectionCover { page: WordSectionCover; }
-
-          @page WordSection1 {
-            size: 21cm 29.7cm; /* A4 */
-            margin: ${layout.marginTop || 4}cm ${layout.marginRight || 3}cm ${layout.marginBottom || 3}cm ${layout.marginLeft || 4}cm;
-            mso-header-margin: 35.4pt;
-            mso-footer-margin: 35.4pt;
-            mso-page-numbers: 1;
-            mso-page-number-style: ${layout.romanPrelims ? 'lower-roman' : 'arabic'};
-            mso-header: h1;
-            mso-footer: f1;
-            mso-paper-source: 0;
-          }
-          div.WordSection1 { page: WordSection1; }
-          
-          @page WordSection2 {
-            size: 21cm 29.7cm; /* A4 */
-            margin: ${layout.marginTop || 4}cm ${layout.marginRight || 3}cm ${layout.marginBottom || 3}cm ${layout.marginLeft || 4}cm;
-            mso-header-margin: 35.4pt;
-            mso-footer-margin: 35.4pt;
-            mso-page-numbers: 1;
-            mso-page-number-style: arabic;
-            mso-header: h1;
-            mso-footer: f1;
-            mso-paper-source: 0;
-          }
-          div.WordSection2 { page: WordSection2; }
-          body {
-            font-family: ${cleanFontFamily};
-          }
-          h1 {
-            font-size: ${headingStyles?.h1?.fontSize || '14pt'};
-            font-weight: ${headingStyles?.h1?.fontWeight || 'bold'};
-            text-align: ${headingStyles?.h1?.textAlign || 'center'};
-            font-family: ${cleanFontFamily};
-            margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
-            mso-style-name: "heading 1";
-            mso-outline-level: 1;
-          }
-          h2 {
-            font-size: ${headingStyles?.h2?.fontSize || '12pt'};
-            font-weight: ${headingStyles?.h2?.fontWeight || 'bold'};
-            text-align: ${headingStyles?.h2?.textAlign || 'left'};
-            font-family: ${cleanFontFamily};
-            margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
-            mso-style-name: "heading 2";
-            mso-outline-level: 2;
-          }
-          h3 {
-            font-size: 12pt;
-            font-weight: ${headingStyles?.h3?.fontWeight || 'bold'};
-            font-style: normal;
-            text-align: ${headingStyles?.h3?.textAlign || 'left'};
-            font-family: ${cleanFontFamily};
-            margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
-            mso-style-name: "heading 3";
-            mso-outline-level: 3;
-          }
-          h4 {
-            font-size: ${headingStyles?.h4?.fontSize || '11pt'};
-            font-weight: ${headingStyles?.h4?.fontWeight || 'bold'};
-            text-align: ${headingStyles?.h4?.textAlign || 'left'};
-            font-family: ${cleanFontFamily};
-            margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
-            mso-style-name: "heading 4";
-            mso-outline-level: 4;
-          }
-          h5 {
-            font-size: ${headingStyles?.h5?.fontSize || '11pt'};
-            font-weight: ${headingStyles?.h5?.fontWeight || 'normal'};
-            text-align: ${headingStyles?.h5?.textAlign || 'left'};
-            font-family: ${cleanFontFamily};
-            margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
-            mso-style-name: "heading 5";
-            mso-outline-level: 5;
-          }
-          h6 {
-            font-size: ${headingStyles?.h6?.fontSize || '10pt'};
-            font-weight: ${headingStyles?.h6?.fontWeight || 'normal'};
-            text-align: ${headingStyles?.h6?.textAlign || 'left'};
-            font-family: ${cleanFontFamily};
-            margin-top: 12pt; margin-bottom: 6pt; page-break-after: avoid;
-            mso-style-name: "heading 6";
-            mso-outline-level: 6;
-          }
-          .toc-item {
-            tab-stops: right dotted ${21.0 - (parseFloat(layout.marginLeft) || 4) - (parseFloat(layout.marginRight) || 3)}cm;
-            mso-tab-stops: right dotted ${21.0 - (parseFloat(layout.marginLeft) || 4) - (parseFloat(layout.marginRight) || 3)}cm;
-          }
-          .MsoHeading1 { mso-style-name: "heading 1"; mso-outline-level: 1; }
-          .MsoHeading2 { mso-style-name: "heading 2"; mso-outline-level: 2; }
-          .MsoHeading3 { mso-style-name: "heading 3"; mso-outline-level: 3; }
-          .MsoHeading4 { mso-style-name: "heading 4"; mso-outline-level: 4; }
-          .MsoHeading5 { mso-style-name: "heading 5"; mso-outline-level: 5; }
-          .MsoHeading6 { mso-style-name: "heading 6"; mso-outline-level: 6; }
-          p {
-            margin-bottom: 6pt;
-            line-height: ${wordLineHeight};
-            text-align: justify;
-            text-indent: 0cm;
-          }
-          p.paragraph-content {
-            text-indent: ${layout.paragraphIndent === 'indented' ? '1.25cm' : '0cm'};
-            margin-bottom: 0pt;
-            line-height: ${wordLineHeight};
-          }
-          table {
-            border-collapse: collapse;
-            width: 100%;
-          }
-          td, th {
-            padding: 6px;
-            font-family: ${cleanFontFamily};
-            font-size: ${layout.fontSize || '12pt'};
-            line-height: 1.5;
-          }
-        </style>
-      </head>
-      <body>
-        ${(() => {
-          // Embed a full draft snapshot so re-importing THIS file restores everything
-          // (title, logo, images, page breaks, layout) with perfect fidelity.
-          try {
-            const snapshot = {
-              __skripsi: true,
-              layout, cover, coverElements, babSections, babTitles, references, refStyle,
-              abstrakIndo, abstrakIndoKeywords, abstrakEng, abstrakEngKeywords, headingStyles
-            };
-            const json = JSON.stringify(snapshot);
-            const b64 = btoa(unescape(encodeURIComponent(json)));
-            return `<!--SKRIPSI_DRAFT_V2:${b64}-->`;
-          } catch (e) {
-            return '';
-          }
-        })()}
-        <!-- Header and Footer definitions -->
-        ${(() => {
-          // Robust Word PAGE field — needs field-begin, code, field-separator, a cached
-          // result value, then field-end so the number shows immediately on open.
-          const pageField = `<span style='mso-element:field-begin'></span><span style='mso-spacerun:yes'> </span>PAGE <span style='mso-element:field-separator'></span>1<span style='mso-element:field-end'></span>`;
-          const pos = layout.pageNumPosition || 'flexible';
-          const inHeader = pos === 'top-right' || pos === 'top-center';
-          const headerAlign = pos === 'top-right' ? 'right' : 'center';
-          const footerAlign = pos === 'bottom-right' ? 'right' : 'center';
-          return `
-        <div style='mso-element:header' id='h1'>
-          <p class='MsoHeader' style='text-align:${headerAlign}; margin:0;'>${inHeader ? pageField : ''}</p>
-        </div>
-        <div style='mso-element:footer' id='f1'>
-          <p class='MsoFooter' style='text-align:${footerAlign}; margin:0;'>${!inHeader ? pageField : ''}</p>
-        </div>
-        <div style='mso-element:header' id='hc'>
-          <p class='MsoHeader' style='margin:0;'>&nbsp;</p>
-        </div>
-        <div style='mso-element:footer' id='fc'>
-          <p class='MsoFooter' style='margin:0;'>&nbsp;</p>
-        </div>`;
-        })()}
-        ${combinedHtml}
-      </body>
-      </html>
-    `;
-
-    await downloadHtmlAsDocx(docHtml, filename, layout);
-  };
+  const executeWordExport = (pageIds, filename) => exportWordDocument({
+    pageIds,
+    filename,
+    layout,
+    headingStyles,
+    cover,
+    coverElements,
+    babSections,
+    babTitles,
+    references,
+    refStyle,
+    abstrakIndo,
+    abstrakIndoKeywords,
+    abstrakEng,
+    abstrakEngKeywords,
+    getSectionParagraphIndent,
+    getParagraphAlignment,
+    italicizeEnglishWordsText,
+    renderFormula,
+  });
 
   const handleStartExport = () => {
+    if (downloadFormat !== 'pdf') {
+      setDownloadFormat('pdf');
+    }
+
     let targetPageIds = [];
     if (downloadRange === 'all') {
       targetPageIds = getVisiblePages();
@@ -4020,7 +3166,7 @@ export default function Index() {
     setShowDownloadModal(false);
 
     setTimeout(() => {
-      if (downloadFormat === 'docx') {
+      if (false) {
         if (downloadSplit) {
           let sectionsToDownload = getSectionsToExport(downloadRange, selectedDownloadSections);
             
@@ -4295,69 +3441,24 @@ export default function Index() {
     return value;
   };
 
-  const computeVisiblePages = () => {
-    const blank = !!layout.blankMode;
-    const pages = ['cover'];
-    if (layout.showPersetujuan) pages.push('persetujuan');
-    if (layout.showPengesahan) pages.push('pengesahan');
-    if (layout.showPernyataan) pages.push('pernyataan');
-    if (layout.showAbstractIndo) pages.push('abstrak-indo');
-    if (layout.showAbstractEng) pages.push('abstrak-eng');
-    
-    // Dynamic Table of Contents Pages (hidden in blank mode)
-    if (!blank) {
-      const tocPagesCount = getTocPages().length;
-      for (let i = 1; i <= tocPagesCount; i++) {
-        pages.push(`daftar-isi-${i}`);
-      }
-      const tabCount = getTableListPages().length;
-      for (let i = 1; i <= tabCount; i++) pages.push(`daftar-tabel-${i}`);
-      const figCount = getFigureListPages().length;
-      for (let i = 1; i <= figCount; i++) pages.push(`daftar-gambar-${i}`);
-      if (layout.showDaftarRumus) {
-        const eqCount = getEquationListPages().length;
-        for (let i = 1; i <= eqCount; i++) pages.push(`daftar-rumus-${i}`);
-      }
-    }
-    
-    // Now, push BAB pages dynamically!
-    const babPagesMap = getBabPagesMap();
-    const skipEmptyBab = blank || !!layout.hideEmptyChapters;
-    getRenderableBabKeys().forEach(babKey => {
-      // In blank/outline mode, skip chapters that have no sections
-      if (skipEmptyBab && (!babSections[babKey] || babSections[babKey].length === 0)) return;
-      const pageCount = babPagesMap[babKey] ? babPagesMap[babKey].length : 1;
-      for (let i = 1; i <= pageCount; i++) {
-        pages.push(`${babKey}-${i}`);
-      }
-    });
-    
-    // Dynamic References Pages (hidden in blank mode when there are no references)
-    if (!blank || (references && references.length > 0)) {
-      const refPagesCount = getReferencesPages().length;
-      for (let i = 1; i <= refPagesCount; i++) {
-        pages.push(`daftar-pustaka-${i}`);
-      }
-    }
-    return pages;
-  };
+  const computeVisiblePages = () => computeVisiblePageIds({
+    layout,
+    references,
+    babSections,
+    babPagesMap: getBabPagesMap(),
+    renderableBabKeys: getRenderableBabKeys(),
+    tocPageCount: getTocPages().length,
+    tableListPageCount: getTableListPages().length,
+    figureListPageCount: getFigureListPages().length,
+    equationListPageCount: getEquationListPages().length,
+    referencesPageCount: getReferencesPages().length,
+  });
 
-  const getPageNumber = (pageId) => {
-    const visiblePages = getVisiblePages();
-    const idx = visiblePages.indexOf(pageId);
-    if (idx === -1 || pageId === 'cover') return '';
-
-    const bab1StartIndex = visiblePages.indexOf('bab1-1');
-    if (bab1StartIndex === -1) return '';
-
-    // Preliminary sections (before bab1-1) get Roman numbers starting from 1 (i)
-    if (idx < bab1StartIndex) {
-      return layout.romanPrelims ? toRoman(idx) : String(idx);
-    }
-
-    // Chapters start from page 1 at bab1-1
-    return String(idx - bab1StartIndex + 1);
-  };
+  const getPageNumber = (pageId) => getPageNumberForPageId({
+    pageId,
+    visiblePages: getVisiblePages(),
+    romanPrelims: layout.romanPrelims,
+  });
 
   // Helper to resolve the correct page number where tables/figures are rendered
   const getPageForBlock = (babKey, blockId) => {
@@ -4384,101 +3485,24 @@ export default function Index() {
     return getPageNumber(pageId);
   };
 
-  // Check if this page should use bottom-center page numbering.
-  // All preliminary/front-matter pages (before BAB I) always use bottom-center.
-  // BAB first pages and Daftar Pustaka first page also use bottom-center.
-  // Only BAB continuation pages (bab*-2, bab*-3, etc.) use top-right.
-  const isChapterStartPage = (pageId) => {
-    // All preliminary/front-matter pages → bottom-center
-    const preliminaryPrefixes = [
-      'persetujuan', 'pengesahan', 'pernyataan', 
-      'abstrak-', 'daftar-isi-', 'daftar-tabel', 'daftar-gambar', 'daftar-rumus'
-    ];
-    if (preliminaryPrefixes.some(prefix => pageId === prefix || pageId.startsWith(prefix))) {
-      return true;
-    }
-    // Chapter start pages (first page of each BAB and Daftar Pustaka)
-    const chapterStartPages = [
-      'bab1-1', 'bab2-1', 'bab3-1', 'bab4-1', 'bab5-1', ...(getRenderableBabKeys().includes('bab6') ? ['bab6-1'] : []),
-      'daftar-pustaka-1'
-    ];
-    return chapterStartPages.includes(pageId);
-  };
+  const getPageNumberClass = (pageId) => 'page-number';
 
-  // Return stylesheet placement based on page type
-  const getPageNumberClass = (pageId) => {
-    let base = 'page-number text-xs text-slate-800';
-    if (layout.pageNumPosition === 'flexible') {
-      // Standard: Bottom-Center on Chapter Starts, Top-Right on subsequent pages
-      return isChapterStartPage(pageId) 
-        ? `absolute bottom-[1.5cm] left-1/2 -translate-x-1/2 ${base}` 
-        : `absolute top-[1.5cm] right-[var(--doc-margin-right)] ${base}`;
-    } else {
-      // Fixed layouts
-      if (layout.pageNumPosition === 'bottom-right') return `absolute bottom-[1.5cm] right-[var(--doc-margin-right)] ${base}`;
-      if (layout.pageNumPosition === 'top-right') return `absolute top-[1.5cm] right-[var(--doc-margin-right)] ${base}`;
-      return `absolute bottom-[1.5cm] left-1/2 -translate-x-1/2 ${base}`;
-    }
-  };
+  const getPageNumberStyleObj = (pageId) => getPageNumberStyle({
+    pageId,
+    pageNumPosition: layout.pageNumPosition,
+    renderableBabKeys: getRenderableBabKeys(),
+    layout,
+  });
 
   // ==========================================================================
   // PARAGRAPHS & ALIGNED LISTS PARSING LOGIC
   // ==========================================================================
   
-  const formatParagraphs = (text) => {
-    if (!text || text.trim() === '') {
-      return <p className="text-slate-400 italic mb-4" style={{ textIndent: 0 }}>Konten kosong. Klik tombol 'AI Tulis' untuk menulis otomatis.</p>;
-    }
-    
-    return text.split(/\n+/).map((p, idx) => {
-      if (p.trim() === '') return null;
-
-      // Check for Markdown headings
-      const headingMatch = p.trim().match(/^(#{1,6})\s+(.*)$/);
-      if (headingMatch) {
-        const level = headingMatch[1].length; // 1 to 6
-        const titleText = headingMatch[2];
-        const style = headingStyles[`h${level}`] || {};
-        
-        const inlineStyle = {
-          fontFamily: 'var(--doc-font-family)',
-          fontSize: level === 3 ? '12pt' : (style.fontSize || '12pt'),
-          fontWeight: style.fontWeight || 'bold',
-          fontStyle: level === 3 ? 'normal' : (style.fontStyle || 'normal'),
-          textAlign: style.textAlign || 'left',
-          textIndent: 0,
-          marginTop: '16px',
-          marginBottom: '6px',
-        };
-        
-        const headingTag = `h${level}`;
-        const className = `heading-level-${level} font-sans leading-normal`;
-        const renderedText = italicizeEnglishWordsText(titleText);
-        const headingId = `heading-${titleText.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-        
-        return React.createElement(headingTag, {
-          key: idx,
-          id: headingId,
-          className: className,
-          style: inlineStyle,
-          dangerouslySetInnerHTML: { __html: style.uppercase ? renderedText.toUpperCase() : renderedText }
-        });
-      }
-      
-      // Regex matches: "1. Text", "1) Text", "a. Text", "A) Text"
-      const listMatch = p.trim().match(/^([0-9a-zA-Z]+[\.\)])\s+(.*)$/);
-      if (listMatch) {
-        return (
-          <div key={idx} className="flex mb-3 pr-1 text-justify items-start" style={{ textIndent: 0 }}>
-            {/* Parallel bullet alignment */}
-            <span className="w-8 shrink-0 font-bold text-slate-800">{listMatch[1]}</span>
-            <span className="flex-1 min-w-0 text-justify text-slate-900" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(listMatch[2]) }} />
-          </div>
-        );
-      }
-      return <p key={idx} className="paragraph-content" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(p.trim()) }} />;
-    });
-  };
+  const formatParagraphs = (text) => formatPreviewParagraphs({
+    text,
+    headingStyles,
+    formatInlineText: italicizeEnglishWordsText,
+  });
 
   // ==========================================================================
   // GOOGLE SCHOLAR CITATION SEARCH (AI ASSISTED)
@@ -5114,20 +4138,148 @@ export default function Index() {
   const triggerAIGenerateFlow = aiAssistant.openAiPromptModal;
   const applySuggestedTitle = (item) => aiAssistant.applySuggestedTitle(item, setCover);
 
+  const renderWritingNotepad = () => {
+    const babKey = activeSection?.startsWith('bab') ? activeSection : 'bab1';
+    const sections = babSections[babKey] || [];
+    const babTitle = babTitles[babKey];
+
+    return (
+      <div id="write-mode-root" className="notepad-writing-area space-y-4 scroll-mt-24">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">Mode Tulis</p>
+          <h2 className="mt-1 text-lg font-black text-slate-900 dark:text-white">
+            {babTitle ? `${babTitle.prefix} ${babTitle.title}` : 'Pilih BAB untuk mulai menulis'}
+          </h2>
+          <p className="mt-2 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+            Tulis konten secara bebas di sini. Klik <span className="font-bold text-slate-700 dark:text-slate-200">Preview A4</span> untuk melihat hasil yang sudah otomatis mengikuti margin, font, line spacing, nomor halaman, dan format laporan.
+          </p>
+        </div>
+
+        {sections.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+            Belum ada sub-bab di bagian ini. Tambahkan sub-bab dari panel kiri.
+          </div>
+        ) : sections.map((sec, index) => {
+          const isTextBlock = !sec.type || sec.type === 'text';
+          const active = inlineEditingBlockId === sec.id;
+
+          return (
+            <section
+              key={sec.id}
+              id={`write-block-${sec.id}`}
+              className={`rounded-2xl border bg-white p-5 shadow-sm transition dark:bg-slate-900 ${active ? 'border-indigo-400 ring-4 ring-indigo-500/10' : 'border-slate-200 dark:border-slate-800'}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                syncWritingBlockNavigation(babKey, sec.id);
+              }}
+            >
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                  Blok {index + 1}
+                </span>
+                <span className="text-[10px] font-bold text-slate-400">{isTextBlock ? 'Paragraf' : sec.type}</span>
+              </div>
+
+              {sec.headingLevel > 0 && (
+                <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-950/70">
+                  <input
+                    id={`content-title-${sec.id}`}
+                    value={sec.title || ''}
+                    onChange={(event) => handleUpdateSectionField(babKey, sec.id, 'title', event.target.value)}
+                    className="w-full border-0 bg-transparent p-0 text-base font-black text-slate-950 outline-none placeholder:text-slate-400 focus:ring-0 dark:text-white"
+                    placeholder="Judul sub-bab..."
+                  />
+                </div>
+              )}
+
+              {isTextBlock ? (
+                <InlineAutoTextarea
+                  id={`textarea-content-${sec.id}`}
+                  value={sec.content || ''}
+                  onCommit={(text) => handleUpdateSectionField(babKey, sec.id, 'content', text)}
+                  rows={8}
+                  className="min-h-[360px] w-full resize-y rounded-xl border border-slate-200 bg-white p-5 text-[15px] leading-8 text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:ring-4 focus:ring-indigo-500/10 dark:border-slate-700 dark:bg-white dark:text-slate-950 dark:placeholder:text-slate-400 dark:focus:border-indigo-500"
+                  placeholder="Tulis isi paragraf di sini..."
+                  onFocus={(event) => {
+                    syncWritingBlockNavigation(babKey, sec.id);
+                    updateActiveParagraphFromTextarea(sec, event.currentTarget);
+                  }}
+                  onClick={(event) => updateActiveParagraphFromTextarea(sec, event.currentTarget)}
+                  onKeyUp={(event) => updateActiveParagraphFromTextarea(sec, event.currentTarget)}
+                  onSelect={(event) => updateActiveParagraphFromTextarea(sec, event.currentTarget)}
+                />
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400">
+                  Blok {sec.type} diedit dari panel kiri dan akan tampil lengkap di Preview A4.
+                </div>
+              )}
+            </section>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const getActiveRulerSection = () => {
+    if (!inlineEditingBlockId || !inlineEditingBabKey) return null;
+    const sec = babSections[inlineEditingBabKey]?.find(x => x.id === inlineEditingBlockId);
+    if (!sec) return null;
+
+    const paragraphIndent = sec.paragraphIndents?.[activeParagraphIndex] || {};
+    const paragraphAlign = sec.paragraphAlignments?.[activeParagraphIndex];
+    return {
+      ...sec,
+      ...paragraphIndent,
+      textAlign: paragraphAlign || sec.textAlign,
+    };
+  };
+
+  const scrollToWriteBlock = (babKey, blockId = null) => {
+    if (!babKey?.startsWith('bab')) return false;
+    setCanvasMode('write');
+    setActiveSection(babKey);
+    if (blockId) {
+      setInlineEditingBlockId(blockId);
+      setInlineEditingBabKey(babKey);
+      setFocusedContentBlockId(blockId);
+    }
+
+    window.setTimeout(() => {
+      const target = blockId
+        ? document.getElementById(`write-block-${blockId}`)
+        : document.getElementById('write-mode-root');
+      target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
+
+    return true;
+  };
+
+  const handleNavigatePage = (pageId) => {
+    if (canvasMode !== 'write') return false;
+    const babKey = pageId?.match(/^(bab\d+)/)?.[1];
+    return scrollToWriteBlock(babKey);
+  };
+
+  const handleNavigateHeading = (entry) => {
+    if (canvasMode !== 'write') return false;
+    const babKey = entry.babKey || entry.pageId?.match(/^(bab\d+)/)?.[1];
+    return scrollToWriteBlock(babKey, entry.blockId || null);
+  };
+
   return (
     <>
       <Head title="SkripsiFormatter v2.0 - Laravel React Thesis Builder" />
       
       {/* Editor Main Grid */}
-      <div className={`flex h-screen w-screen overflow-hidden ${theme === 'dark' ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'} transition-colors duration-200`}>
+      <div className={`flex h-dvh w-screen flex-col overflow-hidden lg:flex-row ${theme === 'dark' ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'} transition-colors duration-200`}>
         
         {/* ==========================================================================
            1. SIDEBAR EDITORS (LEFT)
            ========================================================================== */}
         {sidebarVisible && (
-        <aside className="w-[450px] border-r border-slate-200 dark:border-slate-800 flex flex-col h-full bg-white dark:bg-slate-900 no-print z-20 shadow-xl">
+        <aside className="z-20 flex w-full shrink-0 flex-col border-b border-slate-200 bg-white shadow-xl dark:border-slate-800 dark:bg-slate-900 lg:h-full lg:w-[450px] lg:border-b-0 lg:border-r no-print">
           
-          <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+          <div className="flex items-center justify-between border-b border-slate-200 p-3 dark:border-slate-800 sm:p-4">
             <div className="flex items-center gap-3">
               <div className="bg-indigo-600/10 p-2 rounded-lg text-indigo-500">
                 <GraduationCap className="h-6 w-6" />
@@ -5157,7 +4309,7 @@ export default function Index() {
           </div>
 
           {/* Editor Tabs Navigation */}
-          <div className="flex bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 p-1 gap-1 text-[11px] font-bold">
+          <div className="flex gap-1 overflow-x-auto border-b border-slate-200 bg-slate-50 p-1 text-[10px] font-bold dark:border-slate-800 dark:bg-slate-950 sm:text-[11px]">
             <button onClick={() => setActiveTab('layout')} className={`flex-1 py-2 rounded-md flex flex-col items-center gap-0.5 transition-all ${activeTab === 'layout' ? 'bg-white dark:bg-slate-900 text-indigo-500 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}><Sliders className="h-3.5 w-3.5" />Layout</button>
             <button onClick={() => setActiveTab('konten')} className={`flex-1 py-2 rounded-md flex flex-col items-center gap-0.5 transition-all ${activeTab === 'konten' ? 'bg-white dark:bg-slate-900 text-indigo-500 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}><FileText className="h-3.5 w-3.5" />Isi Konten</button>
             <button onClick={() => setActiveTab('navigasi')} className={`flex-1 py-2 rounded-md flex flex-col items-center gap-0.5 transition-all ${activeTab === 'navigasi' ? 'bg-white dark:bg-slate-900 text-indigo-500 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}><Compass className="h-3.5 w-3.5" />Navigasi</button>
@@ -5167,7 +4319,7 @@ export default function Index() {
           </div>
 
           {/* Scrollable inputs space */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 text-xs">
+          <div className="max-h-[42dvh] flex-1 space-y-4 overflow-y-auto p-3 text-xs lg:max-h-none lg:p-4">
             <LayoutSettingsPanel
               show={activeTab === 'layout'}
               layout={layout}
@@ -5193,6 +4345,8 @@ export default function Index() {
               getPageNumber={getPageNumber}
               formatTocTitle={italicizeEnglishWordsText}
               onActiveNavTabChange={setActiveNavTab}
+              onNavigatePage={handleNavigatePage}
+              onNavigateHeading={handleNavigateHeading}
             />
 
             {/* TAB 2: CONTENT EDITOR */}
@@ -5353,7 +4507,7 @@ export default function Index() {
                                 )}
                               </div>
 
-                              <div className="grid grid-cols-2 gap-2">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                 <div>
                                   <label className="text-[9px] text-slate-400 block mb-0.5">Ukuran Font</label>
                                   <select 
@@ -5943,7 +5097,7 @@ export default function Index() {
                                    <div className="p-2 bg-amber-500/5 border border-amber-500/10 rounded-lg text-[9px] text-amber-500 leading-snug">
                                      Peringatan: Mengedit teks CSV langsung di bawah ini akan mengatur ulang (reset) semua merge span dan warna latar sel yang telah diatur sebelumnya.
                                    </div>
-                                   <div className="grid grid-cols-2 gap-2">
+                                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                      <div>
                                        <label className="text-[9px] text-slate-400 block mb-0.5">Letak Halaman</label>
                                        <div className="w-full bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-350">
@@ -6111,7 +5265,7 @@ export default function Index() {
                                   className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs" 
                                 />
                               </div>
-                              <div className="grid grid-cols-2 gap-2 items-center">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 items-center">
                                 <div>
                                   <label className="text-[9px] text-slate-400 block mb-0.5">Letak Halaman</label>
                                   <div className="w-full bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-350">
@@ -6294,7 +5448,7 @@ export default function Index() {
                                   className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs font-bold" 
                                 />
                               </div>
-                              <div className="grid grid-cols-2 gap-2">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                 <div>
                                   <label className="text-[9px] text-slate-400 block mb-0.5">Rumus / Persamaan</label>
                                   <input 
@@ -6385,7 +5539,7 @@ export default function Index() {
                           ) : (
                             <>
                                <div className="space-y-2">
-                                 <div className="grid grid-cols-2 gap-2">
+                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                    <div>
                                      <label className="text-[9px] text-slate-400 block mb-0.5">Format Teks / Heading</label>
                                      <select 
@@ -6797,7 +5951,7 @@ export default function Index() {
         {!sidebarVisible && (
           <button
             onClick={() => setSidebarVisible(true)}
-            className="fixed top-4 left-4 z-40 bg-indigo-600 hover:bg-indigo-700 text-white p-2.5 rounded-lg shadow-xl flex items-center gap-1.5 no-print text-xs font-bold"
+            className="fixed left-3 top-3 z-40 flex items-center gap-1.5 rounded-lg bg-indigo-600 p-2.5 text-xs font-bold text-white shadow-xl hover:bg-indigo-700 sm:left-4 sm:top-4 no-print"
             title="Tampilkan panel editor"
           >
             <PanelLeftOpen className="h-4 w-4" />
@@ -6815,13 +5969,17 @@ export default function Index() {
           zoomLevel={zoomLevel}
           onZoomOut={() => setZoomLevel(prev => Math.max(prev - 10, 40))}
           onZoomIn={() => setZoomLevel(prev => Math.min(prev + 10, 140))}
-          showRuler={showMarginGuide}
+          showRuler={canvasMode === 'preview' && showMarginGuide}
           onToggleRuler={() => setShowMarginGuide(prev => !prev)}
           layout={layout}
           activeBabKey={inlineEditingBabKey}
-          activeSection={inlineEditingBlockId && inlineEditingBabKey ? babSections[inlineEditingBabKey]?.find(x => x.id === inlineEditingBlockId) : null}
+          activeSection={getActiveRulerSection()}
           onUpdateSectionField={handleUpdateSectionField}
           onApplyParagraphAlignment={applyParagraphAlignment}
+          onApplyParagraphIndent={applyParagraphIndent}
+          canvasMode={canvasMode}
+          onCanvasModeChange={setCanvasMode}
+          writeContent={renderWritingNotepad()}
           onBackgroundClick={handlePreviewBackgroundClick}
           toolbar={(
             <>
@@ -6937,7 +6095,7 @@ export default function Index() {
                       </div>
                     </div>
                   </div>
-                  <div className={getPageNumberClass('persetujuan')}>{getPageNumber('persetujuan')}</div>
+                  <div className={getPageNumberClass('persetujuan')} style={getPageNumberStyleObj('persetujuan')}>{getPageNumber('persetujuan')}</div>
                 </div>
               )}
               {/* PAGE OPTIONAL: PENGESAHAN */}
@@ -7028,7 +6186,7 @@ export default function Index() {
                       </div>
                     </div>
                   </div>
-                  <div className={getPageNumberClass('pengesahan')}>{getPageNumber('pengesahan')}</div>
+                  <div className={getPageNumberClass('pengesahan')} style={getPageNumberStyleObj('pengesahan')}>{getPageNumber('pengesahan')}</div>
                 </div>
               )}
               {/* PAGE OPTIONAL: PERNYATAAN */}
@@ -7082,7 +6240,7 @@ export default function Index() {
                       </div>
                     </div>
                   </div>
-                  <div className={getPageNumberClass('pernyataan')}>{getPageNumber('pernyataan')}</div>
+                  <div className={getPageNumberClass('pernyataan')} style={getPageNumberStyleObj('pernyataan')}>{getPageNumber('pernyataan')}</div>
                 </div>
               )}
 
@@ -7113,7 +6271,7 @@ export default function Index() {
                       <span className="font-normal" dangerouslySetInnerHTML={{ __html: italicizeEnglishWordsText(abstrakIndoKeywords) }} />
                     </div>
                   </div>
-                  <div className={getPageNumberClass('abstrak-indo')}>{getPageNumber('abstrak-indo')}</div>
+                  <div className={getPageNumberClass('abstrak-indo')} style={getPageNumberStyleObj('abstrak-indo')}>{getPageNumber('abstrak-indo')}</div>
                 </div>
               )}
 
@@ -7144,7 +6302,7 @@ export default function Index() {
                       <span className="font-normal">{abstrakEngKeywords}</span>
                     </div>
                   </div>
-                  <div className={getPageNumberClass('abstrak-eng')}>{getPageNumber('abstrak-eng')}</div>
+                  <div className={getPageNumberClass('abstrak-eng')} style={getPageNumberStyleObj('abstrak-eng')}>{getPageNumber('abstrak-eng')}</div>
                 </div>
               )}
 
@@ -7181,7 +6339,7 @@ export default function Index() {
                         </div>
                       </div>
                     </div>
-                    <div className={getPageNumberClass(pageId)}>{getPageNumber(pageId)}</div>
+                    <div className={getPageNumberClass(pageId)} style={getPageNumberStyleObj(pageId)}>{getPageNumber(pageId)}</div>
                   </div>
                 );
               })}
@@ -7208,7 +6366,7 @@ export default function Index() {
                         })}
                       </div>
                     </div>
-                    <div className={getPageNumberClass(pageId)}>{getPageNumber(pageId)}</div>
+                    <div className={getPageNumberClass(pageId)} style={getPageNumberStyleObj(pageId)}>{getPageNumber(pageId)}</div>
                   </div>
                 );
               })}
@@ -7235,7 +6393,7 @@ export default function Index() {
                         })}
                       </div>
                     </div>
-                    <div className={getPageNumberClass(pageId)}>{getPageNumber(pageId)}</div>
+                    <div className={getPageNumberClass(pageId)} style={getPageNumberStyleObj(pageId)}>{getPageNumber(pageId)}</div>
                   </div>
                 );
               })}
@@ -7270,7 +6428,7 @@ export default function Index() {
                         })}
                       </div>
                     </div>
-                    <div className={getPageNumberClass(pageId)}>{getPageNumber(pageId)}</div>
+                    <div className={getPageNumberClass(pageId)} style={getPageNumberStyleObj(pageId)}>{getPageNumber(pageId)}</div>
                   </div>
                 );
               })}
@@ -7288,7 +6446,7 @@ export default function Index() {
                         {pageIdx === 0 && !layout.blankMode && renderHeading(1, getBabHeaderTitle(babKey))}
                         {renderBabDynamicPageContent(babKey, pageIdx)}
                       </div>
-                      <div className={getPageNumberClass(pageId)}>{getPageNumber(pageId)}</div>
+                      <div className={getPageNumberClass(pageId)} style={getPageNumberStyleObj(pageId)}>{getPageNumber(pageId)}</div>
                     </div>
                   );
                 });
@@ -7337,7 +6495,7 @@ export default function Index() {
                         </div>
                       </div>
                     </div>
-                    <div className={getPageNumberClass(pageId)}>{getPageNumber(pageId)}</div>
+                    <div className={getPageNumberClass(pageId)} style={getPageNumberStyleObj(pageId)}>{getPageNumber(pageId)}</div>
                   </div>
                 );
               })}

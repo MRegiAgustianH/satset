@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlignCenter,
   AlignJustify,
@@ -6,6 +6,8 @@ import {
   AlignRight,
   FolderOpen,
   GraduationCap,
+  NotebookPen,
+  FileText,
   Ruler,
   ZoomIn,
   ZoomOut,
@@ -27,7 +29,7 @@ const getDefaultFirstLineIndent = (layout) => (
   layout?.paragraphIndent === 'indented' ? 1.25 : 0
 );
 
-const markerButtonClass = 'absolute h-0 w-0 -translate-x-1/2 cursor-ew-resize border-x-[5px] border-x-transparent';
+const markerButtonClass = 'absolute h-0 w-0 -translate-x-1/2 cursor-ew-resize border-x-[8px] border-x-transparent drop-shadow-md transition-transform hover:scale-125 focus:scale-125 focus:outline-none';
 
 function AlignmentButton({ active, title, onClick, children }) {
   return (
@@ -53,22 +55,31 @@ function ParagraphRuler({
   layout,
   onUpdateSectionField,
   onApplyParagraphAlignment,
+  onApplyParagraphIndent,
 }) {
   const rulerRef = useRef(null);
+  const [dragPreview, setDragPreview] = useState(null);
   const marginLeftCm = clamp(toNumber(layout?.marginLeft, 4), 0, PAGE_WIDTH_CM - 1);
   const marginRightCm = clamp(toNumber(layout?.marginRight, 3), 0, PAGE_WIDTH_CM - marginLeftCm - 1);
   const contentStartCm = marginLeftCm;
   const contentEndCm = PAGE_WIDTH_CM - marginRightCm;
   const contentWidthCm = Math.max(1, contentEndCm - contentStartCm);
-  const leftIndentCm = clamp(toNumber(activeSection?.leftIndentCm, 0), 0, contentWidthCm);
-  const rightIndentCm = clamp(toNumber(activeSection?.rightIndentCm, 0), 0, contentWidthCm);
+  const previewFor = (field, fallback) => (
+    dragPreview?.field === field ? dragPreview.value : fallback
+  );
+  const leftIndentCm = clamp(previewFor('leftIndentCm', toNumber(activeSection?.leftIndentCm, 0)), 0, contentWidthCm);
+  const rightIndentCm = clamp(previewFor('rightIndentCm', toNumber(activeSection?.rightIndentCm, 0)), 0, contentWidthCm);
   const maxLeftPosition = Math.max(0, contentWidthCm - rightIndentCm);
   const firstLineIndentCm = clamp(
-    toNumber(activeSection?.firstLineIndentCm, getDefaultFirstLineIndent(layout)),
+    previewFor('firstLineIndentCm', toNumber(activeSection?.firstLineIndentCm, getDefaultFirstLineIndent(layout))),
     0,
     maxLeftPosition
   );
   const textAlign = activeSection?.textAlign || layout?.textAlign || 'justify';
+
+  useEffect(() => {
+    setDragPreview(null);
+  }, [activeSection?.id, activeBabKey]);
 
   const ticks = useMemo(() => {
     const count = Math.floor(PAGE_WIDTH_CM);
@@ -77,6 +88,11 @@ function ParagraphRuler({
 
   const updateField = (field, value) => {
     if (!activeBabKey || !activeSection) return;
+    setDragPreview({ field, value: Number(value.toFixed(2)) });
+    if (onApplyParagraphIndent) {
+      onApplyParagraphIndent(activeBabKey, activeSection, field, Number(value.toFixed(2)));
+      return;
+    }
     onUpdateSectionField(activeBabKey, activeSection.id, field, Number(value.toFixed(2)));
   };
 
@@ -92,6 +108,7 @@ function ParagraphRuler({
   const startDrag = (field) => (event) => {
     if (!activeBabKey || !activeSection || !rulerRef.current) return;
     event.preventDefault();
+    document.body.classList.add('select-none', 'cursor-ew-resize');
     const rect = rulerRef.current.getBoundingClientRect();
 
     const move = (moveEvent) => {
@@ -111,6 +128,7 @@ function ParagraphRuler({
     };
 
     const stop = () => {
+      document.body.classList.remove('select-none', 'cursor-ew-resize');
       window.removeEventListener('mousemove', move);
       window.removeEventListener('mouseup', stop);
     };
@@ -146,7 +164,7 @@ function ParagraphRuler({
         </div>
       </div>
 
-      <div ref={rulerRef} className="relative h-8 overflow-hidden border border-slate-400 bg-white shadow-sm">
+      <div ref={rulerRef} className="relative h-11 overflow-visible rounded-md border border-slate-400 bg-white shadow-sm">
         <div
           className="absolute inset-y-0 bg-slate-200"
           style={{ left: 0, width: positionPercent(marginLeftCm) }}
@@ -188,25 +206,37 @@ function ParagraphRuler({
           <>
             <button
               type="button"
-              className={`${markerButtonClass} top-[17px] border-t-[9px] border-t-indigo-600`}
+              className={`${markerButtonClass} top-[22px] border-t-[13px] border-t-indigo-600`}
               style={{ left: contentPositionPercent(firstLineIndentCm) }}
               title={`First line indent: ${firstLineIndentCm.toFixed(2)} cm`}
               onMouseDown={startDrag('firstLineIndentCm')}
             />
             <button
               type="button"
-              className={`${markerButtonClass} bottom-[1px] border-b-[9px] border-b-indigo-600`}
+              className={`${markerButtonClass} bottom-[2px] border-b-[13px] border-b-emerald-600`}
               style={{ left: contentPositionPercent(leftIndentCm) }}
               title={`Left indent: ${leftIndentCm.toFixed(2)} cm`}
               onMouseDown={startDrag('leftIndentCm')}
             />
             <button
               type="button"
-              className={`${markerButtonClass} bottom-[1px] border-b-[9px] border-b-indigo-600`}
+              className={`${markerButtonClass} bottom-[2px] border-b-[13px] border-b-rose-600`}
               style={{ left: positionPercent(contentEndCm - rightIndentCm) }}
               title={`Right indent: ${rightIndentCm.toFixed(2)} cm`}
               onMouseDown={startDrag('rightIndentCm')}
             />
+            {dragPreview && (
+              <div
+                className="pointer-events-none absolute -top-7 z-20 -translate-x-1/2 rounded bg-indigo-600 px-2 py-1 text-[10px] font-bold text-white shadow-lg"
+                style={{
+                  left: dragPreview.field === 'rightIndentCm'
+                    ? positionPercent(contentEndCm - dragPreview.value)
+                    : contentPositionPercent(dragPreview.value),
+                }}
+              >
+                {dragPreview.field === 'firstLineIndentCm' ? 'First' : dragPreview.field === 'leftIndentCm' ? 'Left' : 'Right'} {dragPreview.value.toFixed(2)} cm
+              </div>
+            )}
           </>
         )}
       </div>
@@ -286,24 +316,44 @@ export default function DocumentCanvas({
   activeSection,
   onUpdateSectionField,
   onApplyParagraphAlignment,
+  onApplyParagraphIndent,
+  canvasMode = 'write',
+  onCanvasModeChange,
+  writeContent,
   toolbar,
   onBackgroundClick,
   children,
 }) {
   const isUnsaved = !saveFilename || saveFilename === 'Draft_Skripsi';
+  const isPreviewMode = canvasMode === 'preview';
+  const [viewportWidth, setViewportWidth] = useState(() => (
+    typeof window === 'undefined' ? 1024 : window.innerWidth
+  ));
   const zoomScale = zoomLevel / 100;
-  const scaledPageWidth = `${PAGE_WIDTH_CM * zoomScale}cm`;
+  const pageWidthPx = PAGE_WIDTH_CM * 37.795;
+  const mobileFitScale = Math.max(0.36, Math.min(1, (viewportWidth - 32) / pageWidthPx));
+  const effectiveZoomScale = isPreviewMode && viewportWidth < 768
+    ? Math.min(zoomScale, mobileFitScale)
+    : zoomScale;
+  const scaledPageWidth = isPreviewMode ? `${PAGE_WIDTH_CM * effectiveZoomScale}cm` : 'min(100%, 980px)';
+
+  useEffect(() => {
+    const handleResize = () => setViewportWidth(window.innerWidth);
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   return (
-    <main className="flex-1 overflow-auto flex flex-col items-center p-8 bg-slate-300 dark:bg-slate-950/60 relative">
-      <div className="sticky top-0 mb-6 bg-slate-900/85 border border-slate-700 backdrop-blur-md px-4 py-2 rounded-full flex items-center gap-4 text-slate-100 shadow-xl no-print z-30">
-        <div className="flex items-center gap-2 border-r border-slate-700 pr-4 text-xs font-semibold text-slate-300">
+    <main className={`relative flex flex-1 flex-col items-center overflow-auto p-3 sm:p-5 lg:p-8 ${isPreviewMode ? 'bg-slate-300 dark:bg-slate-950/60' : 'bg-slate-100 dark:bg-slate-950/80'}`}>
+      <div className="sticky top-0 z-30 mb-4 flex w-full max-w-5xl flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-700 bg-slate-900/90 px-3 py-2 text-slate-100 shadow-xl backdrop-blur-md sm:mb-6 sm:gap-3 sm:rounded-full sm:px-4 no-print">
+        <div className="flex min-w-0 items-center gap-2 border-slate-700 text-xs font-semibold text-slate-300 sm:border-r sm:pr-4">
           <GraduationCap className="h-4 w-4 text-indigo-400" />
-          <span>{title}</span>
+          <span className="max-w-[150px] truncate sm:max-w-[220px]">{title}</span>
         </div>
 
         <div
-          className="flex items-center gap-1.5 border-r border-slate-700 pr-4 text-[11px]"
+          className="flex min-w-0 items-center gap-1.5 border-slate-700 text-[11px] sm:border-r sm:pr-4"
           title={isUnsaved ? 'Draft belum disimpan ke database' : `Draft aktif: ${saveFilename}`}
         >
           <FolderOpen className={`h-3.5 w-3.5 ${isUnsaved ? 'text-amber-400' : 'text-emerald-400'}`} />
@@ -311,7 +361,7 @@ export default function DocumentCanvas({
             <span className="text-amber-400 font-semibold">Belum disimpan</span>
           ) : (
             <span className="flex items-center gap-1.5">
-              <span className="text-slate-200 font-semibold max-w-[180px] truncate">{saveFilename}</span>
+              <span className="max-w-[120px] truncate font-semibold text-slate-200 sm:max-w-[180px]">{saveFilename}</span>
               <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wide ${autosaveEnabled ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-700 text-slate-400'}`}>
                 {autosaveEnabled ? 'Autosave' : 'Manual'}
               </span>
@@ -319,11 +369,34 @@ export default function DocumentCanvas({
           )}
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1 rounded-full border border-slate-700 bg-slate-950/60 p-1">
+          <button
+            type="button"
+            onClick={() => onCanvasModeChange?.('write')}
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-bold transition-colors ${!isPreviewMode ? 'bg-indigo-600 text-white shadow' : 'text-slate-300 hover:bg-slate-800'}`}
+            title="Mode menulis seperti notepad"
+            aria-pressed={!isPreviewMode}
+          >
+            <NotebookPen className="h-3.5 w-3.5" />
+            Tulis
+          </button>
+          <button
+            type="button"
+            onClick={() => onCanvasModeChange?.('preview')}
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-bold transition-colors ${isPreviewMode ? 'bg-indigo-600 text-white shadow' : 'text-slate-300 hover:bg-slate-800'}`}
+            title="Lihat dalam format laporan A4"
+            aria-pressed={isPreviewMode}
+          >
+            <FileText className="h-3.5 w-3.5" />
+            Preview A4
+          </button>
+        </div>
+
+        <div className={`flex items-center gap-2 sm:gap-3 ${!isPreviewMode ? 'opacity-45' : ''}`}>
           <button type="button" onClick={onZoomOut} className="hover:bg-slate-800 p-1.5 rounded-full" title="Perkecil zoom">
             <ZoomOut className="h-4 w-4" />
           </button>
-          <span className="font-mono text-xs w-10 text-center">{zoomLevel}%</span>
+          <span className="w-9 text-center font-mono text-xs sm:w-10">{zoomLevel}%</span>
           <button type="button" onClick={onZoomIn} className="hover:bg-slate-800 p-1.5 rounded-full" title="Perbesar zoom">
             <ZoomIn className="h-4 w-4" />
           </button>
@@ -331,7 +404,8 @@ export default function DocumentCanvas({
             type="button"
             onClick={onToggleRuler}
             className={`p-1.5 rounded-full transition-colors ${showRuler ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 text-slate-300'}`}
-            title={showRuler ? 'Sembunyikan ruler dan garis margin' : 'Tampilkan ruler dan garis margin'}
+            disabled={!isPreviewMode}
+            title={isPreviewMode ? (showRuler ? 'Sembunyikan ruler dan garis margin' : 'Tampilkan ruler dan garis margin') : 'Ruler tersedia di Preview A4'}
             aria-pressed={showRuler}
           >
             <Ruler className="h-4 w-4" />
@@ -339,19 +413,25 @@ export default function DocumentCanvas({
         </div>
       </div>
 
-      {toolbar}
+      {isPreviewMode && toolbar}
 
-      <div className="relative flex w-full justify-center gap-6">
-        {showRuler && (
+      {!isPreviewMode && (
+        <div className="w-full max-w-5xl pb-24 sm:pb-32" onClick={onBackgroundClick}>
+          {writeContent}
+        </div>
+      )}
+
+      {isPreviewMode && <div className="relative flex w-full justify-center gap-4 overflow-x-auto pb-6 lg:overflow-visible lg:gap-6">
+        {isPreviewMode && showRuler && (
           <div className="no-print sticky top-[10rem] z-10 hidden h-fit self-start lg:block">
             <VerticalPageRuler layout={layout} zoomScale={zoomScale} />
           </div>
         )}
 
-        <div className="flex flex-col items-center">
-          {showRuler && (
+        <div className="flex min-w-fit flex-col items-center">
+          {isPreviewMode && showRuler && (
             <div
-              className="no-print sticky top-[6.25rem] z-20 mb-5 max-w-full rounded-sm bg-slate-950/80 p-1 shadow-xl backdrop-blur"
+              className="no-print sticky top-[6.25rem] z-20 mb-5 max-w-full rounded-lg border border-slate-300 bg-white/95 p-2 shadow-xl backdrop-blur"
               style={{ width: scaledPageWidth }}
             >
               <ParagraphRuler
@@ -360,6 +440,7 @@ export default function DocumentCanvas({
                 layout={layout}
                 onUpdateSectionField={onUpdateSectionField}
                 onApplyParagraphAlignment={onApplyParagraphAlignment}
+                onApplyParagraphIndent={onApplyParagraphIndent}
               />
             </div>
           )}
@@ -367,10 +448,10 @@ export default function DocumentCanvas({
           <div className="document-print-width" style={{ width: scaledPageWidth }} onClick={onBackgroundClick}>
             <div
               className="document-print-transform origin-top-left transition-transform duration-200"
-              style={{ transform: `scale(${zoomScale})` }}
+              style={{ transform: isPreviewMode ? `scale(${effectiveZoomScale})` : 'none' }}
             >
               <div
-                className={`document-print-stack flex flex-col gap-8 pb-32 ${showRuler ? 'show-margin-guide' : ''}`}
+                className={`document-print-stack flex flex-col pb-32 ${isPreviewMode ? 'gap-8' : 'gap-4 notepad-mode'} ${isPreviewMode && showRuler ? 'show-margin-guide' : ''}`}
                 style={{
                   '--doc-margin-top': `${layout.marginTop}cm`,
                   '--doc-margin-left': `${layout.marginLeft}cm`,
@@ -388,7 +469,7 @@ export default function DocumentCanvas({
             </div>
           </div>
         </div>
-      </div>
+      </div>}
     </main>
   );
 }

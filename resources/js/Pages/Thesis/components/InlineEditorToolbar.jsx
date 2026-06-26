@@ -101,10 +101,10 @@ export default function InlineEditorToolbar({
 
   return (
     <div
-      className="sticky top-14 mb-4 bg-slate-900/90 dark:bg-slate-950/95 border border-slate-700/80 backdrop-blur-md px-4 py-2 rounded-full flex flex-wrap items-center gap-3 text-slate-100 shadow-xl no-print z-30 animate-in fade-in slide-in-from-top-2 duration-200 inline-editor-toolbar"
+      className="sticky top-16 z-30 mb-3 flex max-w-[calc(100vw-1rem)] flex-nowrap items-center gap-2 overflow-x-auto rounded-2xl border border-slate-700/80 bg-slate-900/95 px-3 py-2 text-slate-100 shadow-xl backdrop-blur-md animate-in fade-in slide-in-from-top-2 duration-200 dark:bg-slate-950/95 sm:top-14 sm:mb-4 lg:max-w-none lg:flex-wrap lg:overflow-visible lg:rounded-full lg:px-4 no-print inline-editor-toolbar"
       onClick={(event) => event.stopPropagation()}
     >
-      <div className="flex items-center gap-1">
+      <div className="flex shrink-0 items-center gap-1">
         <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider shrink-0 mr-1">Teks:</span>
         <select
           value={section.headingLevel}
@@ -113,7 +113,7 @@ export default function InlineEditorToolbar({
             onUpdateSectionField(babKey, section.id, 'headingLevel', level);
             onUpdateSectionField(babKey, section.id, 'numberingStyle', getDefaultNumberingStyleForHeading(level));
           }}
-          className="bg-slate-800 dark:bg-slate-900 border border-slate-700 py-1 px-2 rounded text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-bold cursor-pointer"
+          className="max-w-[170px] cursor-pointer rounded border border-slate-700 bg-slate-800 px-2 py-1 text-[11px] font-bold text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:bg-slate-900 lg:max-w-none"
         >
           <option value={0}>Paragraf Biasa</option>
           <option value={2}>Heading 2 (Sub-Bab)</option>
@@ -122,12 +122,12 @@ export default function InlineEditorToolbar({
         </select>
       </div>
 
-      <div className="flex items-center gap-1">
+      <div className="flex shrink-0 items-center gap-1">
         <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider shrink-0 mr-1">Nomor:</span>
         <select
           value={section.numberingStyle || 'none'}
           onChange={(event) => onUpdateSectionField(babKey, section.id, 'numberingStyle', event.target.value)}
-          className="bg-slate-800 dark:bg-slate-900 border border-slate-700 py-1 px-2 rounded text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-bold cursor-pointer"
+          className="max-w-[210px] cursor-pointer rounded border border-slate-700 bg-slate-800 px-2 py-1 text-[11px] font-bold text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:bg-slate-900 lg:max-w-none"
         >
           <option value="none">Tanpa Nomor</option>
           <option value="bab_prefix_dot">Bertingkat sesuai heading (1.1)</option>

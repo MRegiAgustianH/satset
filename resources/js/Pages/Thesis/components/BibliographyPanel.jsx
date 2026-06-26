@@ -133,7 +133,7 @@ export default function BibliographyPanel({
           <ScanSearch className="h-3.5 w-3.5 text-indigo-500" />
           Auto Detect Sitasi Paragraf
         </h3>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <button
             type="button"
             onClick={onDetectCitations}
@@ -178,7 +178,7 @@ export default function BibliographyPanel({
             className="w-full bg-white dark:bg-slate-950 border border-slate-200 p-1.5 rounded-lg text-xs"
           />
         </div>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <div>
             <label className="text-[10px] text-slate-400 block mb-0.5">Tahun</label>
             <input

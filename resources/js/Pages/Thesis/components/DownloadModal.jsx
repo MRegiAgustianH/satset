@@ -38,8 +38,8 @@ export default function DownloadModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 no-print text-slate-100">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-[550px] max-h-[90vh] flex flex-col shadow-2xl p-6 overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 text-slate-100 backdrop-blur-sm sm:p-4 no-print">
+      <div className="flex max-h-[92dvh] w-full max-w-[550px] flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 p-4 shadow-2xl sm:p-6">
         <div className="flex justify-between items-center border-b border-slate-800 pb-3 mb-4">
           <h3 className="font-bold flex items-center gap-2 text-sm text-slate-200">
             <Printer className="h-5 w-5 text-indigo-500" />
@@ -51,7 +51,7 @@ export default function DownloadModal({
         <div className="flex-1 overflow-y-auto pr-1 space-y-5 text-xs text-slate-350">
           <div className="space-y-2">
             <label className="font-bold text-slate-400 block">Format Dokumen</label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <button
                 onClick={() => onFormatChange('pdf')}
                 className={`p-3 border rounded-xl text-left transition-all flex flex-col gap-1 ${format === 'pdf' ? 'bg-indigo-600/15 border-indigo-500 text-indigo-400 shadow-sm' : 'bg-slate-950 border-slate-850 hover:bg-slate-850'}`}
@@ -63,14 +63,16 @@ export default function DownloadModal({
                 <span className="text-[10px] text-slate-500 leading-tight">Cocok untuk cetak langsung dengan tata letak & page-number presisi.</span>
               </button>
               <button
-                onClick={() => onFormatChange('docx')}
-                className={`p-3 border rounded-xl text-left transition-all flex flex-col gap-1 ${format === 'docx' ? 'bg-indigo-600/15 border-indigo-500 text-indigo-400 shadow-sm' : 'bg-slate-950 border-slate-850 hover:bg-slate-850'}`}
+                type="button"
+                disabled
+                className="p-3 border rounded-xl text-left transition-all flex flex-col gap-1 bg-slate-950/60 border-slate-850 text-slate-600 cursor-not-allowed opacity-60"
+                title="DOCX dinonaktifkan sementara; fokus unduh PDF dulu."
               >
                 <span className="font-bold text-xs flex items-center gap-1">
                   <span className="h-2 w-2 rounded-full bg-blue-500"></span>
                   Microsoft Word (.docx)
                 </span>
-                <span className="text-[10px] text-slate-500 leading-tight">File DOCX standar yang dapat dibuka dan diedit di Microsoft Word.</span>
+                <span className="text-[10px] text-slate-500 leading-tight">Dinonaktifkan sementara supaya hasil unduhan difokuskan dan distabilkan ke PDF.</span>
               </button>
             </div>
           </div>
@@ -114,7 +116,7 @@ export default function DownloadModal({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 text-[10.5px]">
+                <div className="grid grid-cols-1 gap-2 text-[10.5px] sm:grid-cols-2">
                   {visibleSectionGroups.map((group) => {
                     const checked = selectedSections.includes(group.id);
                     return (
@@ -138,7 +140,7 @@ export default function DownloadModal({
 
           <div className="space-y-2">
             <label className="font-bold text-slate-400 block">Metode Pengemasan File</label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <button
                 onClick={() => onSplitChange(false)}
                 className={`p-3 border rounded-xl text-left transition-all flex flex-col gap-1 ${!split ? 'bg-indigo-600/15 border-indigo-500 text-indigo-400 shadow-sm' : 'bg-slate-950 border-slate-850 hover:bg-slate-850'}`}

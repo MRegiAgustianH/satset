@@ -52,7 +52,7 @@ export default function LayoutSettingsPanel({
           >
             Teknik Informatika
           </button>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <button
               onClick={() => onApplyPreset('sipil')}
               className="py-2 border rounded-lg text-center bg-white dark:bg-slate-950 border-slate-250 text-slate-400"
@@ -87,7 +87,7 @@ export default function LayoutSettingsPanel({
 
       <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-3">
         <h3 className="font-bold text-slate-400 uppercase text-[10px]">Margin Kertas A4 (cm)</h3>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="text-[10px] text-slate-400 block mb-1">Atas</label>
             <input type="number" step="0.5" value={layout.marginTop} onChange={(event) => onLayoutChange('marginTop', parseFloat(event.target.value) || 0)} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg" />
@@ -119,7 +119,7 @@ export default function LayoutSettingsPanel({
           </select>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="text-[10px] text-slate-400 block mb-1">Font Utama</label>
             <select value={layout.fontFamily} onChange={(event) => onLayoutChange('fontFamily', event.target.value)} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg">
@@ -137,7 +137,7 @@ export default function LayoutSettingsPanel({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="text-[10px] text-slate-400 block mb-1">Spasi Tabel</label>
             <select value={layout.tableLineSpacing || '1.0'} onChange={(event) => onLayoutChange('tableLineSpacing', event.target.value)} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-2 rounded-lg text-xs">
@@ -173,7 +173,7 @@ export default function LayoutSettingsPanel({
           Gaya Heading / Sub-Bab
         </h3>
 
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <div>
             <label className="text-[10px] text-slate-400 block mb-1">Heading</label>
             <select value={selectedHeadingToStyle} onChange={(event) => onSelectedHeadingToStyleChange(event.target.value)} className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs">

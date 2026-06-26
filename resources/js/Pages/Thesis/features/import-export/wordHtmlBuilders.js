@@ -4,6 +4,7 @@ import {
   normalizeHeaders,
   normalizeTableRows,
 } from '../../utils/table';
+import { BLOCK_SPACING } from '../document-preview/documentStyles';
 
 const emptyIfNull = (value) => {
   if (value == null) return '';
@@ -88,9 +89,9 @@ export function buildTableWordHtml({
     return html && html.trim() ? html : '&nbsp;';
   };
 
-  let html = '<div style="margin-top:12pt; margin-bottom:12pt; text-indent:0cm;">';
-  html += `<p style="font-weight:bold; font-size:11pt; text-align:left; text-indent:0cm; margin:0 0 6pt 0; font-family:${cleanFontFamily};">${wordCellContent(section.title || 'Tabel')}</p>`;
-  html += '<table border="1" cellspacing="0" cellpadding="5" style="border-collapse:collapse; width:100%; border:1px solid #000;">';
+  let html = `<div style="margin-top:${BLOCK_SPACING.embeddedBlockMargin}; margin-bottom:${BLOCK_SPACING.embeddedBlockMargin}; text-indent:0cm;">`;
+  html += `<p style="font-weight:bold; font-size:${BLOCK_SPACING.captionFontSize}; text-align:left; text-indent:0cm; margin:0 0 ${BLOCK_SPACING.captionBottomMargin} 0; font-family:${cleanFontFamily};">${wordCellContent(section.title || 'Tabel')}</p>`;
+  html += '<table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse; width:100%; border:1px solid #000;">';
   html += '<thead><tr>';
 
   normHeaders.forEach((header, index) => {

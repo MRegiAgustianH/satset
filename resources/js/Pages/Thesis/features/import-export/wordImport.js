@@ -55,7 +55,19 @@ export const createWordImportHandler = (context) => {
     bab3: [],
     bab4: [],
     bab5: [],
+    bab6: [],
   });
+
+  const normalizeBabSections = (input) => {
+    const base = createEmptyBabSections();
+    if (!input || typeof input !== 'object') return base;
+
+    Object.keys(base).forEach((key) => {
+      base[key] = Array.isArray(input[key]) ? input[key] : [];
+    });
+
+    return base;
+  };
 
   const createPlainTextSection = () => ({
     id: 'import_intro_' + Date.now() + Math.random(),
@@ -90,7 +102,8 @@ export const createWordImportHandler = (context) => {
     if (snapshot.layout) setLayout(snapshot.layout);
     if (snapshot.cover) setCover(snapshot.cover);
     if (snapshot.coverElements) setCoverElements(snapshot.coverElements);
-    if (snapshot.babSections) setBabSections(snapshot.babSections);
+    const safeBabSections = normalizeBabSections(snapshot.babSections || babSections);
+    if (snapshot.babSections) setBabSections(safeBabSections);
     if (snapshot.babTitles) setBabTitles(snapshot.babTitles);
     if (Array.isArray(snapshot.references)) setReferences(snapshot.references);
     if (snapshot.refStyle) setRefStyle(snapshot.refStyle);
@@ -104,7 +117,7 @@ export const createWordImportHandler = (context) => {
       layout: snapshot.layout || layout,
       cover: snapshot.cover || cover,
       coverElements: snapshot.coverElements || coverElements,
-      babSections: snapshot.babSections || babSections,
+      babSections: safeBabSections,
       babTitles: snapshot.babTitles || babTitles,
       references: Array.isArray(snapshot.references) ? snapshot.references : [],
       refStyle: snapshot.refStyle || refStyle,
@@ -298,7 +311,8 @@ export const createWordImportHandler = (context) => {
               if (snap.layout) setLayout(snap.layout);
               if (snap.cover) setCover(snap.cover);
               if (snap.coverElements) setCoverElements(snap.coverElements);
-              if (snap.babSections) setBabSections(snap.babSections);
+              const safeSnapBabSections = normalizeBabSections(snap.babSections || babSections);
+              if (snap.babSections) setBabSections(safeSnapBabSections);
               if (snap.babTitles) setBabTitles(snap.babTitles);
               if (Array.isArray(snap.references)) setReferences(snap.references);
               if (snap.refStyle) setRefStyle(snap.refStyle);
@@ -312,7 +326,7 @@ export const createWordImportHandler = (context) => {
                 layout: snap.layout || layout,
                 cover: snap.cover || cover,
                 coverElements: snap.coverElements || coverElements,
-                babSections: snap.babSections || babSections,
+                babSections: safeSnapBabSections,
                 babTitles: snap.babTitles || babTitles,
                 references: Array.isArray(snap.references) ? snap.references : [],
                 refStyle: snap.refStyle || refStyle,
@@ -1355,7 +1369,7 @@ export const createWordImportHandler = (context) => {
         }
       }
     } catch (err) {
-      console.error(err);
+      console.error('DOCX import failed:', err);
       showToast('Gagal memproses dokumen: ' + err.message, true);
     }
     

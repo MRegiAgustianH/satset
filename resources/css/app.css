@@ -115,6 +115,15 @@
 /* Page number styling - uses document font (Times New Roman) */
 .page-number {
   font-family: var(--doc-font-family, 'Times New Roman', Times, serif) !important;
+  font-size: var(--doc-font-size, 12pt) !important;
+  line-height: 1 !important;
+  color: #000000 !important;
+  z-index: 60 !important;
+  pointer-events: none !important;
+}
+
+.a4-page .page-number {
+  position: absolute !important;
 }
 
 /* Perfect Dot Leader for Print and Web */
@@ -130,6 +139,81 @@
 .dot-leader::before {
   content: "................................................................................................................................................................................................................................................................................................................................................................";
   letter-spacing: 0.06em;
+}
+
+
+
+/* Shared academic block spacing aligned with Word export */
+.a4-page .academic-embedded-block {
+  margin-top: 12pt !important;
+  margin-bottom: 12pt !important;
+  text-indent: 0cm !important;
+}
+
+.a4-page .academic-caption {
+  font-family: var(--doc-font-family, 'Times New Roman', Times, serif) !important;
+  font-size: 11pt !important;
+  font-weight: bold !important;
+  text-indent: 0cm !important;
+}
+
+.a4-page .academic-table th,
+.a4-page .academic-table td {
+  padding: 6px !important;
+}
+
+.a4-page .equation-description {
+  margin: 6pt 0 0 1cm !important;
+  padding-left: 0 !important;
+  line-height: 1.2 !important;
+  font-size: 11pt !important;
+}
+
+/* Writing mode: a continuous notepad-style editor before A4 preview/export */
+.notepad-mode {
+  width: min(100%, 980px) !important;
+}
+
+.notepad-mode .a4-page {
+  width: 100% !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: visible !important;
+  page-break-after: auto !important;
+  border: 1px solid rgba(148, 163, 184, 0.35) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08) !important;
+}
+
+.notepad-mode .a4-page:empty,
+.notepad-mode .a4-page:has(> .page-number:only-child) {
+  display: none !important;
+}
+
+.notepad-mode .page-content {
+  height: auto !important;
+  min-height: 0 !important;
+  padding: 1.25rem 1.5rem !important;
+  border: none !important;
+}
+
+.notepad-mode .page-number {
+  display: none !important;
+}
+
+.notepad-mode .a4-page + .a4-page {
+  margin-top: 1rem !important;
+}
+
+.notepad-writing-area textarea {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  caret-color: #4f46e5 !important;
+}
+
+.notepad-writing-area textarea::placeholder {
+  color: #94a3b8 !important;
 }
 
 /* Print Specific Optimizations */

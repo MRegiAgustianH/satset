@@ -84,7 +84,7 @@ export default function SidebarFooter({
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <button onClick={onOpenDraftManager} className="border border-slate-250 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-900 py-2 rounded-lg font-bold flex items-center justify-center gap-1.5">
           <FolderOpen className="h-4 w-4" />
           Drafts
