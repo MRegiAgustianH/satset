@@ -60,7 +60,7 @@ export default function DraftManager({
             <ArrowLeft className="h-4 w-4" />
           </button>
           <div className="flex items-center gap-2">
-            <div className="p-2 bg-indigo-500/10 rounded-lg text-indigo-400">
+            <div className="p-2 bg-teal-500/10 rounded-lg text-teal-600 dark:text-teal-300">
               <FolderOpen className="h-5 w-5" />
             </div>
             <div>
@@ -78,7 +78,7 @@ export default function DraftManager({
               value={draftSearch}
               onChange={(event) => onSearchChange(event.target.value)}
               placeholder="Cari draft..."
-              className="bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-3 py-2 text-xs w-56 focus:outline-none focus:border-indigo-500/60"
+              className="bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-3 py-2 text-xs w-56 focus:outline-none focus:border-teal-500/60"
             />
           </div>
           <button
@@ -99,16 +99,16 @@ export default function DraftManager({
       <div className="flex-1 overflow-y-auto p-6">
         {loadingDrafts ? (
           <div className="flex flex-col items-center justify-center py-24 gap-3 text-slate-400">
-            <Loader2 className="h-8 w-8 animate-spin text-indigo-500" />
+            <Loader2 className="h-8 w-8 animate-spin text-teal-700 dark:text-teal-200" />
             <span className="text-sm">Memuat daftar draft...</span>
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
             <button
               onClick={onOpenNewDraftChooser}
-              className="group bg-slate-900/40 border-2 border-dashed border-slate-700 hover:border-indigo-500/70 rounded-xl p-4 cursor-pointer transition-all flex flex-col items-center justify-center gap-2 min-h-[170px] text-slate-400 hover:text-indigo-300"
+              className="group bg-slate-900/40 border-2 border-dashed border-slate-700 hover:border-teal-500/70 rounded-xl p-4 cursor-pointer transition-all flex flex-col items-center justify-center gap-2 min-h-[170px] text-slate-400 hover:text-teal-300"
             >
-              <div className="p-3 bg-slate-800/60 group-hover:bg-indigo-500/15 rounded-full transition-colors">
+              <div className="p-3 bg-slate-800/60 group-hover:bg-teal-500/15 rounded-full transition-colors">
                 <Plus className="h-7 w-7" />
               </div>
               <span className="text-xs font-bold">Draft Baru</span>
@@ -122,7 +122,7 @@ export default function DraftManager({
                 <div
                   key={item.key}
                   onClick={() => loadAndClose(item)}
-                  className={`group relative bg-slate-900 border rounded-xl p-4 cursor-pointer transition-all hover:shadow-[0_0_18px_-4px_rgba(99,102,241,0.35)] flex flex-col gap-3 ${isActive ? 'border-emerald-500 ring-1 ring-emerald-500/50' : 'border-slate-800 hover:border-indigo-500/70'}`}
+                  className={`group relative bg-slate-900 border rounded-xl p-4 cursor-pointer transition-all hover:shadow-[0_0_18px_-4px_rgba(99,102,241,0.35)] flex flex-col gap-3 ${isActive ? 'border-emerald-500 ring-1 ring-emerald-500/50' : 'border-slate-800 hover:border-teal-500/70'}`}
                 >
                   {isActive && (
                     <span className="absolute -top-2 left-3 bg-emerald-500 text-emerald-950 text-[8px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded shadow">
@@ -130,7 +130,7 @@ export default function DraftManager({
                     </span>
                   )}
                   <div className="flex items-start justify-between">
-                    <div className={`p-3 rounded-xl transition-colors ${isActive ? 'bg-emerald-500/15 text-emerald-400' : 'bg-indigo-500/10 text-indigo-400 group-hover:bg-indigo-500/20'}`}>
+                    <div className={`p-3 rounded-xl transition-colors ${isActive ? 'bg-emerald-500/15 text-emerald-400' : 'bg-teal-500/10 text-teal-600 dark:text-teal-300 group-hover:bg-teal-500/20'}`}>
                       <FileText className="h-7 w-7" />
                     </div>
                     <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${item.source === 'database' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-blue-500/10 text-blue-400'}`}>
@@ -141,7 +141,7 @@ export default function DraftManager({
                     <h3 className="font-bold text-xs text-slate-100 truncate" title={item.title}>{item.title || '(Tanpa Judul)'}</h3>
                     <p className="text-[10px] text-slate-400 truncate mt-0.5">{item.author || 'Tanpa penulis'}</p>
                     {item.slug && (
-                      <p className="text-[9px] text-indigo-400 font-mono truncate mt-0.5" title={`slug / nama file: ${item.slug}`}>
+                      <p className="text-[9px] text-teal-600 dark:text-teal-300 font-mono truncate mt-0.5" title={`slug / nama file: ${item.slug}`}>
                         {item.slug}
                       </p>
                     )}
@@ -156,7 +156,7 @@ export default function DraftManager({
                         event.stopPropagation();
                         loadAndClose(item);
                       }}
-                      className="flex-1 bg-indigo-600/15 hover:bg-indigo-600/30 text-indigo-300 py-1.5 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1"
+                      className="flex-1 bg-teal-700 dark:bg-teal-600/15 hover:bg-teal-700 dark:bg-teal-600/30 text-teal-300 py-1.5 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1"
                     >
                       <FolderOpen className="h-3 w-3" /> Buka
                     </button>
@@ -186,3 +186,4 @@ export default function DraftManager({
     </div>
   );
 }
+

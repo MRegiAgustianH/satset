@@ -37,7 +37,7 @@ function AlignmentButton({ active, title, onClick, children }) {
     <button
       type="button"
       onClick={onClick}
-      className={`${iconButtonClass} ${active ? 'bg-indigo-600 text-white hover:bg-indigo-600' : ''}`}
+      className={`${iconButtonClass} ${active ? 'bg-teal-700 dark:bg-teal-600 text-white hover:bg-teal-700 dark:bg-teal-600' : ''}`}
       title={title}
       aria-pressed={active}
     >
@@ -113,7 +113,7 @@ export default function InlineEditorToolbar({
             onUpdateSectionField(babKey, section.id, 'headingLevel', level);
             onUpdateSectionField(babKey, section.id, 'numberingStyle', getDefaultNumberingStyleForHeading(level));
           }}
-          className="max-w-[170px] cursor-pointer rounded border border-slate-700 bg-slate-800 px-2 py-1 text-[11px] font-bold text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:bg-slate-900 lg:max-w-none"
+          className="max-w-[170px] cursor-pointer rounded border border-slate-700 bg-slate-800 px-2 py-1 text-[11px] font-bold text-white focus:outline-none focus:ring-1 focus:ring-teal-500 dark:bg-slate-900 lg:max-w-none"
         >
           <option value={0}>Paragraf Biasa</option>
           <option value={2}>Heading 2 (Sub-Bab)</option>
@@ -127,7 +127,7 @@ export default function InlineEditorToolbar({
         <select
           value={section.numberingStyle || 'none'}
           onChange={(event) => onUpdateSectionField(babKey, section.id, 'numberingStyle', event.target.value)}
-          className="max-w-[210px] cursor-pointer rounded border border-slate-700 bg-slate-800 px-2 py-1 text-[11px] font-bold text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:bg-slate-900 lg:max-w-none"
+          className="max-w-[210px] cursor-pointer rounded border border-slate-700 bg-slate-800 px-2 py-1 text-[11px] font-bold text-white focus:outline-none focus:ring-1 focus:ring-teal-500 dark:bg-slate-900 lg:max-w-none"
         >
           <option value="none">Tanpa Nomor</option>
           <option value="bab_prefix_dot">Bertingkat sesuai heading (1.1)</option>
@@ -181,7 +181,7 @@ export default function InlineEditorToolbar({
         <button
           type="button"
           onClick={() => updateContentAtCursor('\n[pagebreak]\n')}
-          className={`${textButtonClass} text-indigo-400 hover:text-indigo-300`}
+          className={`${textButtonClass} text-teal-600 dark:text-teal-300 hover:text-teal-300`}
           title="Buat halaman baru dari titik kursor"
         >
           <FilePlus className="h-3.5 w-3.5" />
@@ -282,10 +282,12 @@ export default function InlineEditorToolbar({
       <button
         type="button"
         onClick={onDone}
-        className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1 px-3.5 rounded-full text-[11px] transition-colors shadow-md shadow-indigo-600/10"
+        className="bg-teal-700 dark:bg-teal-600 hover:bg-teal-800 dark:hover:bg-teal-500 text-white font-bold py-1 px-3.5 rounded-full text-[11px] transition-colors shadow-md shadow-teal-700/10"
       >
         Selesai
       </button>
     </div>
   );
 }
+
+

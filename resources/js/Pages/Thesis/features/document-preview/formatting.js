@@ -29,3 +29,4 @@ export const getSectionParagraphStyle = (section = {}, layout = {}) => {
     textIndent: `${textIndent}cm`,
   };
 };
+

@@ -124,3 +124,4 @@ export function buildTableWordHtml({
   html += '</tbody></table></div>';
   return html;
 }
+

@@ -17,3 +17,4 @@ export const SECTION_GROUPS = [
   { id: 'bab6', name: 'BAB VI KESIMPULAN DAN SARAN' },
   { id: 'daftar-pustaka', name: 'Daftar Pustaka' },
 ];
+

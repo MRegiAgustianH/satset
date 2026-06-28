@@ -16,7 +16,7 @@ export default function DraftListModal({
       <div className="bg-slate-900 border border-slate-800 rounded-2xl w-[500px] max-h-[500px] flex flex-col shadow-2xl p-6">
         <div className="flex justify-between items-center border-b border-slate-800 pb-3 mb-4">
           <h3 className="font-bold flex items-center gap-2 text-sm text-slate-200">
-            <Database className="h-5 w-5 text-indigo-500" />
+            <Database className="h-5 w-5 text-teal-700 dark:text-teal-200" />
             Daftar Draft Tersimpan
           </h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-200 text-xs">Tutup</button>
@@ -25,7 +25,7 @@ export default function DraftListModal({
         <div className="flex-1 overflow-y-auto space-y-2">
           {loadingDrafts ? (
             <div className="flex flex-col items-center justify-center py-12 gap-3 text-slate-400">
-              <Loader2 className="h-8 w-8 animate-spin text-indigo-500" />
+              <Loader2 className="h-8 w-8 animate-spin text-teal-700 dark:text-teal-200" />
               <span>Sedang memuat data...</span>
             </div>
           ) : draftsList.length === 0 ? (
@@ -35,7 +35,7 @@ export default function DraftListModal({
               <div
                 key={item.key}
                 onClick={() => onLoadDraft(item)}
-                className="p-3 rounded-lg border border-slate-850 hover:border-indigo-500 bg-slate-950/50 hover:bg-slate-950 flex justify-between items-center cursor-pointer transition-all"
+                className="p-3 rounded-lg border border-slate-850 hover:border-teal-500 bg-slate-950/50 hover:bg-slate-950 flex justify-between items-center cursor-pointer transition-all"
               >
                 <div className="flex-1 min-w-0 pr-4">
                   <h4 className="font-bold text-xs truncate text-slate-200">"{item.title}"</h4>
@@ -58,3 +58,4 @@ export default function DraftListModal({
     </div>
   );
 }
+

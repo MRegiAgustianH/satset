@@ -109,3 +109,4 @@ export const paginateTocEntries = ({ entries = [], layout = {} }) => {
   if (currentPage.length > 0) pages.push(currentPage);
   return pages;
 };
+

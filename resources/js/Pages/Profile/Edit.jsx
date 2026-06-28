@@ -37,3 +37,4 @@ export default function Edit({ mustVerifyEmail, status }) {
         </AuthenticatedLayout>
     );
 }
+

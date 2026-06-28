@@ -3,7 +3,7 @@ import { GraduationCap } from 'lucide-react';
 
 export default function CoverPage({ coverElements = [] }) {
   return (
-    <div className="page-content flex h-full w-full flex-col items-center justify-start border border-dashed border-indigo-500/10">
+    <div className="page-content flex h-full w-full flex-col items-center justify-start border border-dashed border-teal-200 dark:border-teal-800">
       <div className="flex w-full flex-col items-center text-center">
         {coverElements.map((element) => {
           if (element.type === 'spacing') {
@@ -24,10 +24,10 @@ export default function CoverPage({ coverElements = [] }) {
                   />
                 ) : (
                   <div
-                    className="flex items-center justify-center rounded-full border border-indigo-200 bg-indigo-50/50"
+                    className="flex items-center justify-center rounded-full border border-teal-200 bg-teal-50"
                     style={{ height: logoSize, width: logoSize }}
                   >
-                    <GraduationCap className="h-20 w-20 text-indigo-500" />
+                    <GraduationCap className="h-20 w-20 text-teal-700 dark:text-teal-200" />
                   </div>
                 )}
               </div>
@@ -68,3 +68,4 @@ export default function CoverPage({ coverElements = [] }) {
     </div>
   );
 }
+

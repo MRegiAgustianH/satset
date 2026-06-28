@@ -61,7 +61,7 @@ export const formatPreviewParagraphs = ({ text, headingStyles = {}, formatInline
       });
     }
 
-    const listMatch = trimmed.match(/^([0-9a-zA-Z]+[.)])\s+(.*)$/);
+    const listMatch = trimmed.match(/^((?:\d+|[a-zA-Z])[.)])\s+(.*)$/);
     if (listMatch) {
       return (
         <div key={idx} className="flex mb-3 pr-1 text-justify items-start" style={{ textIndent: 0 }}>
@@ -74,3 +74,4 @@ export const formatPreviewParagraphs = ({ text, headingStyles = {}, formatInline
     return <p key={idx} className="paragraph-content" dangerouslySetInnerHTML={{ __html: formatInlineText(trimmed) }} />;
   });
 };
+

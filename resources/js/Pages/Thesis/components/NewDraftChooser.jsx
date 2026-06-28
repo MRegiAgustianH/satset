@@ -16,7 +16,7 @@ export default function NewDraftChooser({
       <div className="bg-slate-900 border border-slate-800/80 rounded-2xl w-[620px] max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
         <div className="p-5 border-b border-slate-800/60 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="p-1.5 bg-indigo-500/10 rounded-lg text-indigo-400">
+            <div className="p-1.5 bg-teal-500/10 rounded-lg text-teal-600 dark:text-teal-300">
               <Plus className="h-4 w-4" />
             </div>
             <h3 className="font-bold text-sm text-slate-100">Buat Draft Baru</h3>
@@ -27,23 +27,23 @@ export default function NewDraftChooser({
         <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-4">
           <div
             onClick={onCreateTemplate}
-            className="group p-5 bg-slate-950 border border-slate-850 hover:border-indigo-500/80 rounded-xl cursor-pointer transition-all flex flex-col gap-2"
+            className="group p-5 bg-slate-950 border border-slate-850 hover:border-teal-500/80 rounded-xl cursor-pointer transition-all flex flex-col gap-2"
           >
-            <div className="p-1.5 bg-indigo-500/10 rounded-lg text-indigo-400 w-fit">
+            <div className="p-1.5 bg-teal-500/10 rounded-lg text-teal-600 dark:text-teal-300 w-fit">
               <Plus className="h-4 w-4" />
             </div>
-            <h4 className="font-bold text-xs text-slate-200 group-hover:text-indigo-400 transition-colors">Template Skripsi Standar</h4>
+            <h4 className="font-bold text-xs text-slate-200 group-hover:text-teal-600 dark:text-teal-300 transition-colors">Template Skripsi Standar</h4>
             <p className="text-[10px] text-slate-400 leading-normal">Struktur lengkap BAB I-V dengan sub-bab standar sesuai format akademik.</p>
           </div>
 
           <div
             onClick={onCreateBlank}
-            className="group p-5 bg-slate-950 border border-slate-850 hover:border-indigo-500/80 rounded-xl cursor-pointer transition-all flex flex-col gap-2"
+            className="group p-5 bg-slate-950 border border-slate-850 hover:border-teal-500/80 rounded-xl cursor-pointer transition-all flex flex-col gap-2"
           >
             <div className="p-1.5 bg-slate-500/10 rounded-lg text-slate-300 w-fit">
               <FileText className="h-4 w-4" />
             </div>
-            <h4 className="font-bold text-xs text-slate-200 group-hover:text-indigo-400 transition-colors">Dokumen Kosong</h4>
+            <h4 className="font-bold text-xs text-slate-200 group-hover:text-teal-600 dark:text-teal-300 transition-colors">Dokumen Kosong</h4>
             <p className="text-[10px] text-slate-400 leading-normal">Satu halaman kosong tanpa outline, daftar isi, atau struktur BAB.</p>
           </div>
 
@@ -60,7 +60,7 @@ export default function NewDraftChooser({
         </div>
 
         <div className="px-6 pb-5 -mt-2">
-          <label className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer flex items-center gap-1.5 w-fit">
+          <label className="text-[11px] text-teal-600 dark:text-teal-300 hover:text-teal-300 font-semibold cursor-pointer flex items-center gap-1.5 w-fit">
             <FolderOpen className="h-3.5 w-3.5" /> atau Impor dari file Word (.doc/.docx)
             <input type="file" accept=".docx,.doc" className="hidden" onChange={onImportDocx} />
           </label>
@@ -69,3 +69,4 @@ export default function NewDraftChooser({
     </div>
   );
 }
+

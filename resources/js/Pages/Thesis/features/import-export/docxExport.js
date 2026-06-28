@@ -99,3 +99,4 @@ export async function downloadHtmlAsDocx(html, filename, layout = {}) {
 
   downloadBlob(blob, `${safeName}.docx`);
 }
+

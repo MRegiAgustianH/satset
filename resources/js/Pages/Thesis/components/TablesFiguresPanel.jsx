@@ -30,13 +30,13 @@ export default function TablesFiguresPanel({
     <div className="space-y-4">
       <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
         <h4 className="font-bold text-slate-400 uppercase text-[10px] flex items-center gap-1">
-          <Table className="h-3.5 w-3.5 text-indigo-500" />
+          <Table className="h-3.5 w-3.5 text-teal-700 dark:text-teal-200" />
           Sisipkan Tabel Baru
         </h4>
         <div>
           <label className="text-[9px] text-slate-400 block mb-0.5">Judul Tabel (Caption)</label>
           <div className="flex overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950">
-            <span className="shrink-0 border-r border-slate-200 dark:border-slate-800 bg-indigo-600/10 px-2 py-1.5 text-[10px] font-bold text-indigo-500 dark:text-indigo-300">
+            <span className="shrink-0 border-r border-slate-200 dark:border-slate-800 bg-teal-700 dark:bg-teal-600/10 px-2 py-1.5 text-[10px] font-bold text-teal-700 dark:text-teal-200">
               {getAutoCaptionPrefix ? getAutoCaptionPrefix('table', tableInput.bab, 'new_table') : 'Tabel'}
             </span>
             <input
@@ -87,7 +87,7 @@ export default function TablesFiguresPanel({
             className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 p-1.5 rounded-lg text-xs"
           />
         </div>
-        <button onClick={onAddTable} className="w-full bg-indigo-600 hover:bg-indigo-700 py-1.5 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1">
+        <button onClick={onAddTable} className="w-full bg-teal-700 dark:bg-teal-600 hover:bg-teal-800 dark:hover:bg-teal-500 py-1.5 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1">
           <Plus className="h-4 w-4" />
           Tambah Tabel
         </button>
@@ -95,7 +95,7 @@ export default function TablesFiguresPanel({
 
       <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
         <h4 className="font-bold text-slate-400 uppercase text-[10px] flex items-center gap-1">
-          <ImageIcon className="h-3.5 w-3.5 text-indigo-500" />
+          <ImageIcon className="h-3.5 w-3.5 text-teal-700 dark:text-teal-200" />
           Sisipkan Gambar Baru
         </h4>
         <div>
@@ -120,7 +120,7 @@ export default function TablesFiguresPanel({
             <option value="bab4">{babTitles.bab4.prefix}</option>
           </select>
         </div>
-        <button onClick={onAddFigure} className="w-full bg-indigo-600 hover:bg-indigo-700 py-1.5 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1">
+        <button onClick={onAddFigure} className="w-full bg-teal-700 dark:bg-teal-600 hover:bg-teal-800 dark:hover:bg-teal-500 py-1.5 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1">
           <Plus className="h-4 w-4" />
           Tambah Gambar
         </button>
@@ -135,7 +135,7 @@ export default function TablesFiguresPanel({
                   <div>
                     <label className="text-[8px] text-slate-400 block mb-0.5">Judul Tabel (Caption)</label>
                     <div className="flex overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
-                      <span className="shrink-0 border-r border-slate-200 dark:border-slate-800 bg-indigo-600/10 px-2 py-1.5 text-[10px] font-bold text-indigo-500 dark:text-indigo-300">
+                      <span className="shrink-0 border-r border-slate-200 dark:border-slate-800 bg-teal-700 dark:bg-teal-600/10 px-2 py-1.5 text-[10px] font-bold text-teal-700 dark:text-teal-200">
                         {getAutoCaptionPrefix ? getAutoCaptionPrefix('table', editingElementData.bab, editingElementId) : 'Tabel'}
                       </span>
                       <input
@@ -185,7 +185,7 @@ export default function TablesFiguresPanel({
                 </div>
                 <div className="flex gap-2 justify-end">
                   <button onClick={() => onEditingElementIdChange(null)} className="px-2 py-1 bg-slate-100 hover:bg-slate-250 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-400 rounded-lg text-[9px]">Batal</button>
-                  <button onClick={onSaveTableEdit} className="px-2.5 py-1 bg-indigo-650 hover:bg-indigo-700 text-white rounded-lg text-[9px] font-bold">Simpan</button>
+                  <button onClick={onSaveTableEdit} className="px-2.5 py-1 bg-teal-700 dark:bg-teal-600 hover:bg-teal-800 dark:hover:bg-teal-500 text-white rounded-lg text-[9px] font-bold">Simpan</button>
                 </div>
               </div>
             ) : (
@@ -202,7 +202,7 @@ export default function TablesFiguresPanel({
                         rowsText: tableItem.rowsText || (tableItem.rows ? tableItem.rows.map((row) => row.join(', ')).join('\n') : ''),
                       });
                     }}
-                    className="text-indigo-500 hover:text-indigo-400 text-[9px]"
+                    className="text-teal-700 dark:text-teal-200 hover:text-teal-600 dark:text-teal-300 text-[9px]"
                   >
                     Edit
                   </button>
@@ -245,7 +245,7 @@ export default function TablesFiguresPanel({
                 </div>
                 <div className="flex gap-2 justify-end">
                   <button onClick={() => onEditingElementIdChange(null)} className="px-2 py-1 bg-slate-100 hover:bg-slate-250 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-400 rounded-lg text-[9px]">Batal</button>
-                  <button onClick={onSaveFigureEdit} className="px-2.5 py-1 bg-indigo-650 hover:bg-indigo-700 text-white rounded-lg text-[9px] font-bold">Simpan</button>
+                  <button onClick={onSaveFigureEdit} className="px-2.5 py-1 bg-teal-700 dark:bg-teal-600 hover:bg-teal-800 dark:hover:bg-teal-500 text-white rounded-lg text-[9px] font-bold">Simpan</button>
                 </div>
               </div>
             ) : (
@@ -260,7 +260,7 @@ export default function TablesFiguresPanel({
                         bab: figureItem.bab,
                       });
                     }}
-                    className="text-indigo-500 hover:text-indigo-400 text-[9px]"
+                    className="text-teal-700 dark:text-teal-200 hover:text-teal-600 dark:text-teal-300 text-[9px]"
                   >
                     Edit
                   </button>
@@ -276,3 +276,5 @@ export default function TablesFiguresPanel({
     </div>
   );
 }
+
+

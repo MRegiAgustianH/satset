@@ -18,7 +18,7 @@ export default function AiPromptModal({
       <div className="bg-slate-900 border border-slate-800 rounded-2xl w-[480px] flex flex-col shadow-2xl p-6 animate-in fade-in zoom-in-95 duration-200">
         <div className="flex justify-between items-center border-b border-slate-800 pb-3 mb-4">
           <h3 className="font-bold flex items-center gap-2 text-sm text-slate-200">
-            <Sparkles className="h-5 w-5 text-indigo-500" />
+            <Sparkles className="h-5 w-5 text-teal-700 dark:text-teal-200" />
             {isRevision ? 'Revisi Konten dengan AI' : 'Tulis Konten dengan AI'}
           </h3>
           <button
@@ -46,7 +46,7 @@ export default function AiPromptModal({
               onChange={(e) => onPromptInputChange(e.target.value)}
               placeholder={isRevision ? 'Contoh: latar belakang kurang fokus ke masalah utama, tambahkan gap penelitian dan perjelas objek penelitian.' : 'Contoh: sertakan tabel perbandingan metode, tulis dalam 2 paragraf, gunakan nada akademis formal, dll.'}
               rows={4}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-teal-500 focus:border-teal-500"
             />
             <span className="block text-[9px] text-slate-500 mt-1 leading-normal">
               {isRevision ? '*Masukkan komentar dosen apa adanya. AI akan menulis ulang bagian ini sesuai revisi dan tetap menjaga urutan laporan.' : '*Jika Anda meminta tabel, AI akan otomatis menghasilkan data tabel dan menambahkannya sebagai bagian tabel dinamis baru tepat di bawah paragraf ini.'}
@@ -63,7 +63,7 @@ export default function AiPromptModal({
           </button>
           <button
             onClick={onGenerateWithPrompt}
-            className="bg-indigo-600 hover:bg-indigo-700 px-5 py-2 rounded-lg font-bold text-white flex items-center gap-1.5 shadow-md shadow-indigo-650/10"
+            className="bg-teal-700 dark:bg-teal-600 hover:bg-teal-800 dark:hover:bg-teal-500 px-5 py-2 rounded-lg font-bold text-white flex items-center gap-1.5 shadow-md shadow-teal-700/10"
           >
             <Sparkles className="h-3.5 w-3.5" />
             {isRevision ? 'Revisi dari Komentar' : 'Tulis dengan Prompt'}
@@ -73,3 +73,5 @@ export default function AiPromptModal({
     </div>
   );
 }
+
+

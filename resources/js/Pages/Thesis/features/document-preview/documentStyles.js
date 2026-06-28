@@ -17,3 +17,4 @@ export const getCleanFontFamily = (fontFamily) => (
 );
 
 export const getBaseFontSize = (layout = {}) => layout.fontSize || '12pt';
+

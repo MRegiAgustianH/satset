@@ -38,7 +38,7 @@ function AlignmentButton({ active, title, onClick, children }) {
       onClick={onClick}
       className={`h-6 w-6 inline-flex items-center justify-center rounded-sm border transition-colors ${
         active
-          ? 'border-indigo-500 bg-indigo-600 text-white'
+          ? 'border-teal-500 bg-teal-700 dark:bg-teal-600 text-white'
           : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-200 hover:text-slate-900'
       }`}
       title={title}
@@ -206,7 +206,7 @@ function ParagraphRuler({
           <>
             <button
               type="button"
-              className={`${markerButtonClass} top-[22px] border-t-[13px] border-t-indigo-600`}
+              className={`${markerButtonClass} top-[22px] border-t-[13px] border-t-teal-700`}
               style={{ left: contentPositionPercent(firstLineIndentCm) }}
               title={`First line indent: ${firstLineIndentCm.toFixed(2)} cm`}
               onMouseDown={startDrag('firstLineIndentCm')}
@@ -227,7 +227,7 @@ function ParagraphRuler({
             />
             {dragPreview && (
               <div
-                className="pointer-events-none absolute -top-7 z-20 -translate-x-1/2 rounded bg-indigo-600 px-2 py-1 text-[10px] font-bold text-white shadow-lg"
+                className="pointer-events-none absolute -top-7 z-20 -translate-x-1/2 rounded bg-teal-700 dark:bg-teal-600 px-2 py-1 text-[10px] font-bold text-white shadow-lg"
                 style={{
                   left: dragPreview.field === 'rightIndentCm'
                     ? positionPercent(contentEndCm - dragPreview.value)
@@ -348,7 +348,7 @@ export default function DocumentCanvas({
     <main className={`relative flex flex-1 flex-col items-center overflow-auto p-3 sm:p-5 lg:p-8 ${isPreviewMode ? 'bg-slate-300 dark:bg-slate-950/60' : 'bg-slate-100 dark:bg-slate-950/80'}`}>
       <div className="sticky top-0 z-30 mb-4 flex w-full max-w-5xl flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-700 bg-slate-900/90 px-3 py-2 text-slate-100 shadow-xl backdrop-blur-md sm:mb-6 sm:gap-3 sm:rounded-full sm:px-4 no-print">
         <div className="flex min-w-0 items-center gap-2 border-slate-700 text-xs font-semibold text-slate-300 sm:border-r sm:pr-4">
-          <GraduationCap className="h-4 w-4 text-indigo-400" />
+          <GraduationCap className="h-4 w-4 text-teal-600 dark:text-teal-300" />
           <span className="max-w-[150px] truncate sm:max-w-[220px]">{title}</span>
         </div>
 
@@ -373,7 +373,7 @@ export default function DocumentCanvas({
           <button
             type="button"
             onClick={() => onCanvasModeChange?.('write')}
-            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-bold transition-colors ${!isPreviewMode ? 'bg-indigo-600 text-white shadow' : 'text-slate-300 hover:bg-slate-800'}`}
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-bold transition-colors ${!isPreviewMode ? 'bg-teal-700 dark:bg-teal-600 text-white shadow' : 'text-slate-300 hover:bg-slate-800'}`}
             title="Mode menulis seperti notepad"
             aria-pressed={!isPreviewMode}
           >
@@ -383,7 +383,7 @@ export default function DocumentCanvas({
           <button
             type="button"
             onClick={() => onCanvasModeChange?.('preview')}
-            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-bold transition-colors ${isPreviewMode ? 'bg-indigo-600 text-white shadow' : 'text-slate-300 hover:bg-slate-800'}`}
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-bold transition-colors ${isPreviewMode ? 'bg-teal-700 dark:bg-teal-600 text-white shadow' : 'text-slate-300 hover:bg-slate-800'}`}
             title="Lihat dalam format laporan A4"
             aria-pressed={isPreviewMode}
           >
@@ -403,7 +403,7 @@ export default function DocumentCanvas({
           <button
             type="button"
             onClick={onToggleRuler}
-            className={`p-1.5 rounded-full transition-colors ${showRuler ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 text-slate-300'}`}
+            className={`p-1.5 rounded-full transition-colors ${showRuler ? 'bg-teal-700 dark:bg-teal-600 text-white' : 'hover:bg-slate-800 text-slate-300'}`}
             disabled={!isPreviewMode}
             title={isPreviewMode ? (showRuler ? 'Sembunyikan ruler dan garis margin' : 'Tampilkan ruler dan garis margin') : 'Ruler tersedia di Preview A4'}
             aria-pressed={showRuler}
@@ -473,3 +473,5 @@ export default function DocumentCanvas({
     </main>
   );
 }
+
+

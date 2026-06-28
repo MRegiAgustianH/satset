@@ -20,7 +20,7 @@ const PAGE_WIDTH_CM = 21;
 const PAGE_HEIGHT_CM = 29.7;
 const DEFAULT_FIGURE_WIDTH_CM = 12;
 const DEFAULT_FIGURE_HEIGHT_CM = 8;
-const PAGE_BOTTOM_SAFETY_PX = 72;
+const PAGE_BOTTOM_SAFETY_PX = 10;
 
 const getFigureAspectRatio = (figure) => {
   const storedRatio = parseFloat(figure.imgAspectRatio);
@@ -97,7 +97,7 @@ const estimateElementHeight = (el, layout) => {
   }
 
   if (el.type === 'paragraph') {
-    const isList = /^[0-9a-zA-Z]+[\.\)]\s+/.test(el.text);
+    const isList = /^(?:\d+|[a-zA-Z])[\.\)]\s+/.test(el.text);
     return estimateParagraphHeight(el.text, widthPx, layout, isList);
   }
 
@@ -323,7 +323,7 @@ export const buildBabPagesMap = ({ sections, layout, inlineEditingBlockId }) => 
         const availableHeight = maxPageHeight - currentHeight;
         const lineGapPx = getLineHeightPx(layout);
         const linesFit = Math.floor((availableHeight - 8) / lineGapPx);
-        const isList = /^[0-9a-zA-Z]+[\.\)]\s+/.test(el.text);
+        const isList = /^(?:\d+|[a-zA-Z])[\.\)]\s+/.test(el.text);
         const widthPx = getContentWidthPx(layout);
         const totalLines = estimateParagraphLines(el.text, widthPx, layout, isList);
 
@@ -346,7 +346,7 @@ export const buildBabPagesMap = ({ sections, layout, inlineEditingBlockId }) => 
           const availableHeight = maxPageHeight - currentHeight;
           const lineGapPx = getLineHeightPx(layout);
           const linesFit = Math.floor((availableHeight - 8) / lineGapPx);
-          const isList = /^[0-9a-zA-Z]+[\.\)]\s+/.test(el.text);
+          const isList = /^(?:\d+|[a-zA-Z])[\.\)]\s+/.test(el.text);
           const widthPx = getContentWidthPx(layout);
           const totalLines = estimateParagraphLines(el.text, widthPx, layout, isList);
 
@@ -427,3 +427,4 @@ export const paginateListEntries = (entries, layout) => {
   if (pages.length === 0) pages.push([]);
   return pages;
 };
+

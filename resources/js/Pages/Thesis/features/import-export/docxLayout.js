@@ -237,3 +237,4 @@ export const DOCX_MAMMOTH_STYLE_MAP = [
   "p[style-name='Sub Bab'] => h2:fresh",
   "p[style-name='SubBab'] => h2:fresh",
 ];
+

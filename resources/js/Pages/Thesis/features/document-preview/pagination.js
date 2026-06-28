@@ -65,7 +65,7 @@ export const estimateParagraphLines = (text, widthPx, layout, isList = false) =>
 
 export const estimateParagraphHeight = (text, widthPx, layout, isList = false) => {
   const lines = estimateParagraphLines(text, widthPx, layout, isList);
-  return (lines * getLineHeightPx(layout)) + 6;
+  return (lines * getLineHeightPx(layout)) + 8;
 };
 export const paginateReferences = ({ references = [], refStyle = 'apa', layout = {} }) => {
   const pages = [];
@@ -111,3 +111,4 @@ export const paginateReferences = ({ references = [], refStyle = 'apa', layout =
   if (pages.length === 0) pages.push([]);
   return pages;
 };
+

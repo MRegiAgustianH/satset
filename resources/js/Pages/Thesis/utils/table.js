@@ -94,3 +94,4 @@ export const computeMaskedCells = (rows) => {
   }
   return masked;
 };
+

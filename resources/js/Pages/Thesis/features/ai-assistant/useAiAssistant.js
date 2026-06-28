@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { recommendTitlesRequest, searchCitationRequest, generateSectionRequest, aiChatRequest } from '../../services/aiApi';
+import { recommendTitlesRequest, searchCitationRequest, generateSectionRequest, aiChatRequest, testAiConnectionRequest } from '../../services/aiApi';
 
 const hasContent = (section) => Boolean(section?.content && section.content.trim().length > 0);
 
@@ -8,6 +8,29 @@ const buildOrderedTextSections = (babSections) => Object.entries(babSections || 
     .filter((section) => section.type === 'text' && section.headingLevel > 0)
     .map((section) => ({ ...section, babKey }))
 ));
+const importGeneratedReferences = (resData, mergeReferences, showToast) => {
+  const generatedReferences = Array.isArray(resData?.references) ? resData.references : [];
+  if (!generatedReferences.length || typeof mergeReferences !== 'function') return;
+
+  const normalized = generatedReferences
+    .filter((ref) => ref && (ref.author || ref.title))
+    .map((ref, index) => ({
+      id: ref.id || `ref_ai_${Date.now()}_${index}`,
+      type: ref.type || 'journal',
+      author: ref.author || 'Penulis belum terdeteksi',
+      year: ref.year || '',
+      title: ref.title || 'Judul belum terdeteksi',
+      publisher: ref.publisher || ref.source || '',
+      url: ref.url || ref.pdf_url || '',
+      doi: ref.doi || '',
+    }));
+
+  if (normalized.length) {
+    mergeReferences(normalized, `${normalized.length} referensi dari AI ditambahkan ke pustaka.`);
+  } else if (showToast) {
+    showToast('AI tidak mengembalikan referensi yang bisa dimasukkan ke pustaka.', true);
+  }
+};
 
 export const useAiAssistant = ({
   cover,
@@ -20,14 +43,27 @@ export const useAiAssistant = ({
   setBabSections,
   saveLocalDraft,
   showToast,
+  mergeReferences,
+  references = [],
   babTitles,
   babSections,
 }) => {
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
+  const [aiConfig, setAiConfig] = useState(() => ({
+    provider: localStorage.getItem('ai_provider') || 'gemini',
+    apiKey: localStorage.getItem('ai_api_key') || localStorage.getItem('gemini_api_key') || '',
+    model: localStorage.getItem('ai_model') || 'gemini-2.5-flash',
+    baseUrl: localStorage.getItem('ai_base_url') || '',
+  }));
+  const apiKey = aiConfig.apiKey;
+  const isLocalCustomEndpoint = aiConfig.provider === 'custom' && new RegExp('^https?://(localhost|127\\\\.0\\\\.0\\\\.1|\\\\[::1\\\\])', 'i').test(aiConfig.baseUrl || '');
+  const hasAiCredential = Boolean(apiKey || isLocalCustomEndpoint);
   const [aiInputs, setAiInputs] = useState({
     fakultas: 'Teknologi Informasi',
     prodi: 'Sistem Informasi',
     topik: 'Platform Pembelajaran E-Learning',
+    metode: '',
+    metode_pengembangan: '',
+    metode_pengujian: '',
   });
   const [suggestedTitles, setSuggestedTitles] = useState([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
@@ -40,6 +76,7 @@ export const useAiAssistant = ({
   ]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
+  const [testingAiConnection, setTestingAiConnection] = useState(false);
 
   // Scholar search states
   const [scholarQuery, setScholarQuery] = useState('');
@@ -48,21 +85,72 @@ export const useAiAssistant = ({
   const [searchingScholar, setSearchingScholar] = useState(false);
   const [scholarResults, setScholarResults] = useState([]);
 
-  const handleApiKeyChange = (val) => {
-    setApiKey(val);
-    localStorage.setItem('gemini_api_key', val);
+  const updateAiConfig = (patch) => {
+    setAiConfig((prev) => {
+      const next = { ...prev, ...patch };
+      localStorage.setItem('ai_provider', next.provider || 'gemini');
+      localStorage.setItem('ai_api_key', next.apiKey || '');
+      localStorage.setItem('gemini_api_key', next.apiKey || '');
+      localStorage.setItem('ai_model', next.model || '');
+      localStorage.setItem('ai_base_url', next.baseUrl || '');
+      return next;
+    });
   };
 
+  const handleApiKeyChange = (val) => updateAiConfig({ apiKey: val });
+
+  const getEffectiveTopik = () => {
+    const currentTopik = (aiInputs.topik || '').trim();
+    if (currentTopik && currentTopik !== 'Platform Pembelajaran E-Learning') return currentTopik;
+    return cover.title || currentTopik || 'Sesuai judul';
+  };
+
+  const getActiveReferencesForAi = () => (Array.isArray(references) ? references : [])
+    .filter((ref) => ref && (ref.title || ref.author || ref.publisher || ref.url || ref.doi))
+    .slice(0, 30)
+    .map((ref) => ({
+      type: ref.type || '',
+      author: ref.author || '',
+      year: ref.year || '',
+      title: ref.title || '',
+      publisher: ref.publisher || '',
+      url: ref.url || '',
+      doi: ref.doi || '',
+    }));
+
+
+  const testAiConnection = async () => {
+    if (!hasAiCredential) {
+      showToast('Masukkan API Key AI terlebih dahulu!', true);
+      return;
+    }
+
+    setTestingAiConnection(true);
+    showToast('Mengecek koneksi AI...');
+    try {
+      const response = await testAiConnectionRequest(aiConfig);
+      const data = await response.json();
+      if (!response.ok || data.ok === false) {
+        showToast(data.error || 'Koneksi AI gagal.', true);
+        return;
+      }
+      showToast(`${data.message || 'Koneksi AI berhasil.'} (${data.provider || aiConfig.provider} / ${data.model || aiConfig.model})`);
+    } catch (e) {
+      showToast('Koneksi AI gagal: ' + e.message, true);
+    } finally {
+      setTestingAiConnection(false);
+    }
+  };
   const fetchTitleRecommendations = async () => {
-    if (!apiKey) {
-      showToast('Masukkan API Key Gemini terlebih dahulu!', true);
+    if (!hasAiCredential) {
+      showToast('Masukkan API Key AI terlebih dahulu!', true);
       return;
     }
     setLoadingSuggestions(true);
     setSuggestedTitles([]);
     showToast('Mencari rekomendasi judul dan metode...');
     try {
-      const response = await recommendTitlesRequest(apiKey, {
+      const response = await recommendTitlesRequest(aiConfig, {
         fakultas: aiInputs.fakultas,
         prodi: aiInputs.prodi,
         topik: aiInputs.topik,
@@ -88,15 +176,21 @@ export const useAiAssistant = ({
       saveLocalDraft({ cover: updated });
       return updated;
     });
-    setAiInputs((p) => ({ ...p, topik: item.judul }));
+    setAiInputs((p) => ({
+      ...p,
+      topik: item.judul,
+      metode: item.metode || '',
+      metode_pengembangan: item.metode_pengembangan || '',
+      metode_pengujian: item.metode_pengujian || '',
+    }));
     showToast('Judul rekomendasi diterapkan.');
   };
 
   const handleScholarSearch = async (e) => {
     if (e && e.preventDefault) e.preventDefault();
     if (!scholarQuery.trim()) return;
-    if (!apiKey) {
-      showToast('Masukkan API Key Gemini terlebih dahulu!', true);
+    if (!hasAiCredential) {
+      showToast('Masukkan API Key AI terlebih dahulu!', true);
       return;
     }
 
@@ -105,7 +199,7 @@ export const useAiAssistant = ({
     showToast('Mencari referensi di database Google Scholar / ResearchGate...');
 
     try {
-      const response = await searchCitationRequest(apiKey, {
+      const response = await searchCitationRequest(aiConfig, {
         query: scholarQuery,
         yearStart: scholarYearStartVal,
         yearEnd: scholarYearEndVal,
@@ -167,8 +261,8 @@ export const useAiAssistant = ({
   };
 
   const handleAIGenerateSection = async (sectionKey, displayTitle, additionalPrompt = '') => {
-    if (!apiKey) {
-      showToast('Masukkan API Key Gemini terlebih dahulu!', true);
+    if (!hasAiCredential) {
+      showToast('Masukkan API Key AI terlebih dahulu!', true);
       return;
     }
     const legacyToId = Object.entries(legacySectionKeyMapping).find(([, v]) => v === sectionKey);
@@ -176,20 +270,23 @@ export const useAiAssistant = ({
     const legacyTarget = buildOrderedTextSections(babSections).find((section) => section.id === trackingId);
     if (legacyTarget && !ensureGenerationOrder(legacyTarget.babKey, legacyTarget.id, displayTitle)) return;
     setGeneratingSection(trackingId);
-    showToast(`Menghubungi Gemini untuk draf ${displayTitle}...`);
+    showToast(`Menghubungi AI untuk draf ${displayTitle}...`);
 
     try {
-      const response = await generateSectionRequest(apiKey, {
+      const response = await generateSectionRequest(aiConfig, {
         title: cover.title,
         section: sectionKey,
         fakultas: aiInputs.fakultas,
         prodi: aiInputs.prodi,
-        topik: aiInputs.topik,
-        metode: tables.length > 0 ? 'Fuzzy/KNN/PLS-SEM' : 'Metode Deskriptif',
+        topik: getEffectiveTopik(),
+        metode: aiInputs.metode || 'Sesuai judul',
+        metode_pengembangan: aiInputs.metode_pengembangan || null,
+        metode_pengujian: aiInputs.metode_pengujian || null,
         ai_write_style: sectionKey === 'latar_belakang' ? backgroundStyle : 'direct',
         year_start: scholarYearStart,
         year_end: scholarYearEnd,
         additional_prompt: additionalPrompt,
+        references: getActiveReferencesForAi(),
       });
 
       const resData = await response.json();
@@ -197,6 +294,8 @@ export const useAiAssistant = ({
         showToast(resData.error || 'Gagal menghasilkan konten.', true);
         return;
       }
+
+      importGeneratedReferences(resData, mergeReferences, showToast);
 
       const content = resData.content;
 
@@ -276,28 +375,31 @@ export const useAiAssistant = ({
   };
 
   const handleAIGenerateDynamic = async (babKey, sectionId, sectionTitle, additionalPrompt = '') => {
-    if (!apiKey) {
-      showToast('Masukkan API Key Gemini terlebih dahulu!', true);
+    if (!hasAiCredential) {
+      showToast('Masukkan API Key AI terlebih dahulu!', true);
       return;
     }
     if (!ensureGenerationOrder(babKey, sectionId, sectionTitle)) return;
     setGeneratingSection(sectionId);
-    showToast(`Menghubungi Gemini untuk draf "${sectionTitle}"...`);
+    showToast(`Menghubungi AI untuk draf "${sectionTitle}"...`);
 
     const currentBab = babTitles[babKey];
     const babContext = currentBab ? `${currentBab.prefix} (${currentBab.title})` : `BAB ${babKey.replace('bab', '')}`;
 
     try {
-      const response = await generateSectionRequest(apiKey, {
+      const response = await generateSectionRequest(aiConfig, {
         title: cover.title,
         section: '__dynamic__',
         section_title: sectionTitle,
         bab_context: babContext,
         fakultas: aiInputs.fakultas,
         prodi: aiInputs.prodi,
-        topik: aiInputs.topik,
-        metode: tables.length > 0 ? 'Fuzzy/KNN/PLS-SEM' : 'Metode Deskriptif',
+        topik: getEffectiveTopik(),
+        metode: aiInputs.metode || 'Sesuai judul',
+        metode_pengembangan: aiInputs.metode_pengembangan || null,
+        metode_pengujian: aiInputs.metode_pengujian || null,
         additional_prompt: additionalPrompt,
+        references: getActiveReferencesForAi(),
       });
 
       const resData = await response.json();
@@ -306,6 +408,7 @@ export const useAiAssistant = ({
         return;
       }
 
+      importGeneratedReferences(resData, mergeReferences, showToast);
       updateSectionContentById(babKey, sectionId, resData.content);
       showToast(`Konten "${sectionTitle}" berhasil ditulis oleh AI!`);
     } catch (e) {
@@ -318,8 +421,8 @@ export const useAiAssistant = ({
   const sendChatMessage = async () => {
     const message = chatInput.trim();
     if (!message || chatLoading) return;
-    if (!apiKey) {
-      showToast('Masukkan API Key Gemini terlebih dahulu!', true);
+    if (!hasAiCredential) {
+      showToast('Masukkan API Key AI terlebih dahulu!', true);
       return;
     }
 
@@ -329,13 +432,13 @@ export const useAiAssistant = ({
     setChatLoading(true);
 
     try {
-      const response = await aiChatRequest(apiKey, {
+      const response = await aiChatRequest(aiConfig, {
         message,
         history: nextMessages.slice(-8),
         title: cover.title,
         fakultas: aiInputs.fakultas,
         prodi: aiInputs.prodi,
-        topik: aiInputs.topik,
+        topik: getEffectiveTopik(),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -352,6 +455,7 @@ export const useAiAssistant = ({
 
   return {
     apiKey,
+    aiConfig,
     aiInputs,
     setAiInputs,
     suggestedTitles,
@@ -365,6 +469,7 @@ export const useAiAssistant = ({
     chatInput,
     setChatInput,
     chatLoading,
+    testingAiConnection,
     scholarQuery,
     setScholarQuery,
     scholarYearStartVal,
@@ -375,6 +480,8 @@ export const useAiAssistant = ({
     scholarResults,
     setScholarResults,
     handleApiKeyChange,
+    updateAiConfig,
+    testAiConnection,
     fetchTitleRecommendations,
     applySuggestedTitle,
     handleScholarSearch,
@@ -384,3 +491,4 @@ export const useAiAssistant = ({
     sendChatMessage,
   };
 };
+

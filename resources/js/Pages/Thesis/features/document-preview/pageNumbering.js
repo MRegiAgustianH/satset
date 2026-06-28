@@ -107,3 +107,4 @@ export const getPageNumberStyle = ({ pageId, pageNumPosition = 'flexible', rende
 
   return style;
 };
+

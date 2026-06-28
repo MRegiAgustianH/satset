@@ -65,3 +65,4 @@ BAB II TINJAUAN PUSTAKA
     </div>
   );
 }
+

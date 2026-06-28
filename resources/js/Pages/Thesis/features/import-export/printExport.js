@@ -74,3 +74,4 @@ export const executeSplitPrintPdf = ({ sectionsToExport, getVisiblePages, setPag
     setPagesToPrint(null);
   }, delay + 600);
 };
+

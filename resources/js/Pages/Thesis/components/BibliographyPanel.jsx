@@ -33,7 +33,7 @@ export default function BibliographyPanel({
     <div className="space-y-4">
       <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
         <h3 className="font-bold text-slate-400 uppercase text-[10px] flex items-center gap-1">
-          <Search className="h-3.5 w-3.5 text-indigo-500" />
+          <Search className="h-3.5 w-3.5 text-teal-700 dark:text-teal-200" />
           Cari di Google Scholar / ResearchGate
         </h3>
         <form onSubmit={onScholarSearch} className="space-y-2">
@@ -45,7 +45,7 @@ export default function BibliographyPanel({
               placeholder="Kata kunci: Sugiyono 2018 / DeLone McLean"
               className="flex-1 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-1.5 text-xs text-slate-800 dark:text-slate-100"
             />
-            <button type="submit" disabled={searchingScholar} className="bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg disabled:opacity-50">
+            <button type="submit" disabled={searchingScholar} className="bg-teal-700 dark:bg-teal-600 hover:bg-teal-800 dark:bg-teal-500 text-white p-2 rounded-lg disabled:opacity-50">
               {searchingScholar ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
             </button>
           </div>
@@ -76,20 +76,20 @@ export default function BibliographyPanel({
             {scholarResults.map((citation, index) => (
               <div key={index} className="p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg flex flex-col gap-1 text-[10px]">
                 <div className="flex justify-between items-center mb-1">
-                  <span className="bg-indigo-500/10 text-indigo-400 px-1 py-0.5 rounded text-[8px] font-bold uppercase">{citation.source}</span>
+                  <span className="bg-teal-500/10 text-teal-600 dark:text-teal-300 px-1 py-0.5 rounded text-[8px] font-bold uppercase">{citation.source}</span>
                   <div className="flex gap-1.5 items-center">
                     {citation.url && (
                       <a
                         href={citation.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-indigo-500 dark:text-indigo-400 hover:text-indigo-650 dark:hover:text-indigo-300 font-semibold flex items-center gap-0.5 text-[8.5px] border border-indigo-500/20 px-1.5 py-0.5 rounded bg-indigo-500/5 hover:bg-indigo-500/10"
+                        className="text-teal-700 dark:text-teal-200 hover:text-teal-800 dark:hover:text-teal-300 font-semibold flex items-center gap-0.5 text-[8.5px] border border-teal-200 dark:border-teal-800 px-1.5 py-0.5 rounded bg-teal-500/5 hover:bg-teal-500/10"
                       >
                         <ExternalLink className="h-2.5 w-2.5" />
                         PDF
                       </a>
                     )}
-                    <button onClick={() => onImportCitation(citation)} className="text-indigo-500 dark:text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300 font-bold flex items-center gap-0.5 text-[9px]">
+                    <button onClick={() => onImportCitation(citation)} className="text-teal-700 dark:text-teal-200 hover:text-teal-700 dark:hover:text-teal-300 font-bold flex items-center gap-0.5 text-[9px]">
                       <Plus className="h-3 w-3" />
                       Tambah
                     </button>
@@ -105,7 +105,7 @@ export default function BibliographyPanel({
 
       <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-3">
         <h3 className="font-bold text-slate-400 uppercase text-[10px] flex items-center gap-1">
-          <ClipboardPaste className="h-3.5 w-3.5 text-indigo-500" />
+          <ClipboardPaste className="h-3.5 w-3.5 text-teal-700 dark:text-teal-200" />
           Paste Daftar Pustaka Manual
         </h3>
         <textarea
@@ -118,7 +118,7 @@ export default function BibliographyPanel({
         <button
           type="button"
           onClick={onImportManualReferences}
-          className="w-full bg-indigo-600 hover:bg-indigo-700 py-1.5 text-white font-bold rounded-lg flex items-center justify-center gap-1"
+          className="w-full bg-teal-700 dark:bg-teal-600 hover:bg-teal-800 dark:bg-teal-500 py-1.5 text-white font-bold rounded-lg flex items-center justify-center gap-1"
         >
           <Plus className="h-4 w-4" />
           Tambahkan dari Paste
@@ -130,14 +130,14 @@ export default function BibliographyPanel({
 
       <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-3">
         <h3 className="font-bold text-slate-400 uppercase text-[10px] flex items-center gap-1">
-          <ScanSearch className="h-3.5 w-3.5 text-indigo-500" />
+          <ScanSearch className="h-3.5 w-3.5 text-teal-700 dark:text-teal-200" />
           Auto Detect Sitasi Paragraf
         </h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <button
             type="button"
             onClick={onDetectCitations}
-            className="border border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-500 dark:text-indigo-300 py-1.5 rounded-lg font-bold flex items-center justify-center gap-1"
+            className="border border-teal-300 dark:border-teal-700 bg-teal-500/10 hover:bg-teal-500/20 text-teal-700 dark:text-teal-200 py-1.5 rounded-lg font-bold flex items-center justify-center gap-1"
           >
             <ScanSearch className="h-3.5 w-3.5" />
             Deteksi Sitasi
@@ -156,7 +156,7 @@ export default function BibliographyPanel({
             {detectedCitations.map((citation) => (
               <div key={`${citation.author}-${citation.year}`} className="flex justify-between gap-2 text-[10px] bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded px-2 py-1">
                 <span className="truncate">{citation.author}</span>
-                <span className="font-bold text-indigo-500">{citation.year}</span>
+                <span className="font-bold text-teal-700 dark:text-teal-200">{citation.year}</span>
               </div>
             ))}
           </div>
@@ -218,7 +218,7 @@ export default function BibliographyPanel({
             className="w-full bg-white dark:bg-slate-950 border border-slate-200 p-1.5 rounded-lg text-xs"
           />
         </div>
-        <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 py-1.5 text-white font-bold rounded-lg flex items-center justify-center gap-1">
+        <button type="submit" className="w-full bg-teal-700 dark:bg-teal-600 hover:bg-teal-800 dark:bg-teal-500 py-1.5 text-white font-bold rounded-lg flex items-center justify-center gap-1">
           <Plus className="h-4 w-4" />
           Tambah Pustaka
         </button>
@@ -228,8 +228,8 @@ export default function BibliographyPanel({
         <div className="flex justify-between items-center pb-2 border-b border-slate-200 dark:border-slate-800">
           <span className="font-bold text-slate-400 text-[10px]">Daftar Sitasi ({references.length})</span>
           <div className="flex bg-slate-100 dark:bg-slate-950 p-0.5 gap-0.5 rounded text-[9px] font-bold">
-            <button onClick={() => onRefStyleChange('apa')} className={`px-1.5 py-0.5 rounded ${refStyle === 'apa' ? 'bg-white dark:bg-slate-900 text-indigo-500' : 'text-slate-400'}`}>APA</button>
-            <button onClick={() => onRefStyleChange('ieee')} className={`px-1.5 py-0.5 rounded ${refStyle === 'ieee' ? 'bg-white dark:bg-slate-900 text-indigo-500' : 'text-slate-400'}`}>IEEE</button>
+            <button onClick={() => onRefStyleChange('apa')} className={`px-1.5 py-0.5 rounded ${refStyle === 'apa' ? 'bg-white dark:bg-slate-900 text-teal-700 dark:text-teal-200' : 'text-slate-400'}`}>APA</button>
+            <button onClick={() => onRefStyleChange('ieee')} className={`px-1.5 py-0.5 rounded ${refStyle === 'ieee' ? 'bg-white dark:bg-slate-900 text-teal-700 dark:text-teal-200' : 'text-slate-400'}`}>IEEE</button>
           </div>
         </div>
         <div className="space-y-1.5 max-h-[180px] overflow-y-auto pr-1">
@@ -246,3 +246,4 @@ export default function BibliographyPanel({
     </div>
   );
 }
+

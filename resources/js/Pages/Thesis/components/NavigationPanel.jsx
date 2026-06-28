@@ -52,20 +52,20 @@ export default function NavigationPanel({
     <div className="space-y-4">
       <div className="p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800/60 rounded-xl space-y-2">
         <h3 className="font-bold text-slate-400 uppercase text-[10px] mb-2 flex items-center gap-1.5">
-          <Compass className="h-3.5 w-3.5 text-indigo-500" />
+          <Compass className="h-3.5 w-3.5 text-teal-700 dark:text-teal-200" />
           Navigasi Dokumen
         </h3>
 
         <div className="flex bg-slate-100 dark:bg-slate-950 p-1 gap-1 rounded-lg text-[10px] font-bold">
           <button
             onClick={() => onActiveNavTabChange('pages')}
-            className={`flex-1 py-1.5 rounded-md text-center transition-all ${activeNavTab === 'pages' ? 'bg-white dark:bg-slate-900 text-indigo-500 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+            className={`flex-1 py-1.5 rounded-md text-center transition-all ${activeNavTab === 'pages' ? 'bg-white dark:bg-slate-900 text-teal-700 dark:text-teal-200 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
           >
             Halaman
           </button>
           <button
             onClick={() => onActiveNavTabChange('headings')}
-            className={`flex-1 py-1.5 rounded-md text-center transition-all ${activeNavTab === 'headings' ? 'bg-white dark:bg-slate-900 text-indigo-500 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+            className={`flex-1 py-1.5 rounded-md text-center transition-all ${activeNavTab === 'headings' ? 'bg-white dark:bg-slate-900 text-teal-700 dark:text-teal-200 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
           >
             Daftar Bab & Judul
           </button>
@@ -84,7 +84,7 @@ export default function NavigationPanel({
                   if (onNavigatePage?.(pageId)) return;
                   scrollToElement(`page-${pageId}`);
                 }}
-                className="w-full text-left p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-indigo-500 hover:bg-indigo-50/10 transition-all flex justify-between items-center text-[11px]"
+                className="w-full text-left p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-teal-500 hover:bg-teal-50/10 transition-all flex justify-between items-center text-[11px]"
               >
                 <span className="font-semibold text-slate-700 dark:text-slate-350 truncate">
                   {index + 1}. {getPageTitle(pageId)}
@@ -118,7 +118,7 @@ export default function NavigationPanel({
                   }
                 }}
                 style={indentStyle}
-                className={`w-full text-left p-1 rounded hover:bg-indigo-500/10 hover:text-indigo-400 transition-colors flex justify-between items-baseline text-[11px] ${isChapter ? 'font-bold text-slate-800 dark:text-slate-200' : 'text-slate-500 dark:text-slate-400'}`}
+                className={`w-full text-left p-1 rounded hover:bg-teal-500/10 hover:text-teal-600 dark:text-teal-300 transition-colors flex justify-between items-baseline text-[11px] ${isChapter ? 'font-bold text-slate-800 dark:text-slate-200' : 'text-slate-500 dark:text-slate-400'}`}
               >
                 <span className="truncate flex-1 mr-2" dangerouslySetInnerHTML={{ __html: formatTocTitle(entry.title) }} />
                 {pageNum && (
@@ -134,3 +134,5 @@ export default function NavigationPanel({
     </div>
   );
 }
+
+

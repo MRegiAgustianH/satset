@@ -135,3 +135,4 @@ export const resolveBlockNumberingForBab = (babKey, sections) => {
     };
   });
 };
+
